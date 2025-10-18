@@ -159,10 +159,38 @@ class Verifier:
             # Calculate movement
             movement = next_day_close - prediction_day_close
             movement_pct = (movement / prediction_day_close) * 100 if prediction_day_close > 0 else 0
-            
-            # IMPROVED: Dynamic threshold based on symbol volatility
-            # You can customize this per symbol (e.g., crypto vs forex)
-            bias_threshold = 0.05  # 0.05% threshold for neutral
+
+            # IMPROVED: Dynamic symbol/volatility thresholds
+            # Prefer ATR-based if available in rates; else use symbol categories via env map
+            # NOTE: MetaTrader5 rates include 'high'/'low' fields; fall back if missing
+            try:
+                # Compute simple 5-day ATR% if enough data
+                if len(rates) >= 6 and all(k in rates[0].dtype.names for k in ("high", "low", "close")):
+                    import numpy as _np
+                    import pandas as _pd
+                    _df = _pd.DataFrame(list(rates))
+                    tr1 = _df['high'] - _df['low']
+                    tr2 = (_df['high'] - _df['close'].shift()).abs()
+                    tr3 = (_df['low'] - _df['close'].shift()).abs()
+                    tr = _pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    atr = tr.rolling(window=5).mean().iloc[-1]
+                    atr_pct = float((atr / prediction_day_close) * 100) if prediction_day_close > 0 else 0.0
+                    dynamic_threshold = max(0.05, min(atr_pct * 0.5, 2.0))  # 50% of ATR%, clamped
+                else:
+                    dynamic_threshold = None
+            except Exception:
+                dynamic_threshold = None
+
+            if dynamic_threshold is None:
+                # Fallback by symbol category via env var, e.g. "XAUUSD:0.25,BTCUSD:1.0,DEFAULT:0.05"
+                raw = os.getenv("VERIFIER_THRESHOLD_MAP", "DEFAULT:0.05")
+                mapping = dict(
+                    item.split(":") for item in raw.split(",") if ":" in item
+                )
+                symbol_upper = os.getenv("CURRENT_SYMBOL", "").upper()
+                bias_threshold = float(mapping.get(symbol_upper, mapping.get("DEFAULT", 0.05)))
+            else:
+                bias_threshold = dynamic_threshold
             abs_movement_pct = abs(movement_pct)
             
             # Determine actual bias
@@ -180,7 +208,7 @@ class Verifier:
             # Enhanced logging
             print(f"   Prediction Day Close: {prediction_day_close:.5f}")
             print(f"   Next Day Close: {next_day_close:.5f}")
-            print(f"   Movement: {movement_pct:+.3f}% → Actual: {actual_bias.upper()}")
+            print(f"   Movement: {movement_pct:+.3f}% (threshold {bias_threshold:.3f}%) → Actual: {actual_bias.upper()}")
             print(f"   Predicted: {predicted_bias.upper()} → {'✅ CORRECT' if result else '❌ INCORRECT'}")
             
             return actual_bias, result
