@@ -20,7 +20,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
 
-import pandas as p# Optional dependencies (import inside functions to avoid hard failure)
+import pandas as pd
+import numpy as np
+
+# Optional dependencies (import inside functions to avoid hard failure)
 try:
     import MetaTrader5 as mt5
     MT5_AVAILABLE = True
@@ -36,13 +39,13 @@ except ImportError:
     YFINANCE_AVAILABLE = False
 
 # ----------------------------
-# CONFIG (FROM ENVIRONMENT)
-# -------------------------------------------------------
-# MT5 credentials - read from environment variables with sensible defaults
-MT5_LOGIN = int(os.environ.get("MT5_LOGIN", "0"))
-MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "")
-MT5_SERVER = os.environ.get("MT5_SERVER", "Pepperstone-Demo")
-MT5_PATH = os.environ.get("MT5_PATH", r"C:\Program Files\Pepperstone MetaTrader 5\terminal64.exe")
+# CONFIG (DEV / HARDCODED)
+# ----------------------------
+# DEV/demo credentials
+MT5_LOGIN = 61420404
+MT5_PASSWORD = "armC3ie$hx"
+MT5_SERVER = "Pepperstone-Demo"
+MT5_PATH = r"C:\Program Files\Pepperstone MetaTrader 5\terminal64.exe"
 
 # Data cache folder
 DATA_DIR = "data"
@@ -618,7 +621,7 @@ class DataManager:
                     results[tf] = df
                     logger.info(f"✅ {symbol} {tf}: {len(df)} bars")
                 else:
-                    logger.warning(f"⚠️ No data for {symbol} {tf}")
+                    logger.warning(f⚠️ No data for {symbol} {tf}")
                     
             except Exception as e:
                 logger.error(f"❌ Failed to fetch {symbol} {tf}: {e}")
