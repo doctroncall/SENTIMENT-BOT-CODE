@@ -621,7 +621,7 @@ class DataManager:
                     results[tf] = df
                     logger.info(f"✅ {symbol} {tf}: {len(df)} bars")
                 else:
-                    logger.warning(f⚠️ No data for {symbol} {tf}")
+                    logger.warning(f"⚠️ No data for {symbol} {tf}")
                     
             except Exception as e:
                 logger.error(f"❌ Failed to fetch {symbol} {tf}: {e}")
