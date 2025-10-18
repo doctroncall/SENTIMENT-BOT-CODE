@@ -20,10 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
 
-import pandas as pd
-import numpy as np
-
-# Optional dependencies (import inside functions to avoid hard failure)
+import pandas as p# Optional dependencies (import inside functions to avoid hard failure)
 try:
     import MetaTrader5 as mt5
     MT5_AVAILABLE = True
@@ -35,9 +32,12 @@ try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
-    yf = # ----------------------------
-# CONFIG (FROM ENVIRONMENT)
+    yf = None
+    YFINANCE_AVAILABLE = False
+
 # ----------------------------
+# CONFIG (FROM ENVIRONMENT)
+# -------------------------------------------------------
 # MT5 credentials - read from environment variables with sensible defaults
 MT5_LOGIN = int(os.environ.get("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "")

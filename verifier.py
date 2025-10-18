@@ -25,7 +25,7 @@ class Verifier:
         self.mt5_login = mt5_login if mt5_login is not None else DEFAULT_MT5_LOGIN
         self.mt5_password = mt5_password if mt5_password is not None else DEFAULT_MT5_PASSWORD
         self.mt5_server = mt5_server if mt5_server is not None else DEFAULT_MT5_SERVER
-        self._initialized = FalseFalse
+        self._initialized = False
         
     def _init_mt5(self) -> bool:
         """Initialize MT5 connection with error handling"""
