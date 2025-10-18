@@ -35,17 +35,14 @@ try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
-    yf = None
-    YFINANCE_AVAILABLE = False
-
+    yf = # ----------------------------
+# CONFIG (FROM ENVIRONMENT)
 # ----------------------------
-# CONFIG (DEV / HARDCODED)
-# ----------------------------
-# DEV/demo credentials
-MT5_LOGIN = 61420404
-MT5_PASSWORD = "armC3ie$hx"
-MT5_SERVER = "Pepperstone-Demo"
-MT5_PATH = r"C:\Program Files\Pepperstone MetaTrader 5\terminal64.exe"
+# MT5 credentials - read from environment variables with sensible defaults
+MT5_LOGIN = int(os.environ.get("MT5_LOGIN", "0"))
+MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "")
+MT5_SERVER = os.environ.get("MT5_SERVER", "Pepperstone-Demo")
+MT5_PATH = os.environ.get("MT5_PATH", r"C:\Program Files\Pepperstone MetaTrader 5\terminal64.exe")
 
 # Data cache folder
 DATA_DIR = "data"
@@ -621,7 +618,7 @@ class DataManager:
                     results[tf] = df
                     logger.info(f"✅ {symbol} {tf}: {len(df)} bars")
                 else:
-                    logger.warning(f⚠️ No data for {symbol} {tf}")
+                    logger.warning(f"⚠️ No data for {symbol} {tf}")
                     
             except Exception as e:
                 logger.error(f"❌ Failed to fetch {symbol} {tf}: {e}")

@@ -13,14 +13,19 @@ except ImportError:
     mt5 = None
     MT5_AVAILABLE = False
 
+# MT5 credentials - read from environment variables with sensible defaults
+DEFAULT_MT5_LOGIN = int(os.environ.get("MT5_LOGIN", "0"))
+DEFAULT_MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "")
+DEFAULT_MT5_SERVER = os.environ.get("MT5_SERVER", "Pepperstone-Demo")
+
 class Verifier:
-    def __init__(self, excel_file="sentiment_log.xlsx", mt5_login=61420404, 
-                 mt5_password="armC3ie$hx", mt5_server="Pepperstone-Demo"):
+    def __init__(self, excel_file="sentiment_log.xlsx", mt5_login=None, 
+                 mt5_password=None, mt5_server=None):
         self.excel_file = excel_file
-        self.mt5_login = mt5_login
-        self.mt5_password = mt5_password
-        self.mt5_server = mt5_server
-        self._initialized = False
+        self.mt5_login = mt5_login if mt5_login is not None else DEFAULT_MT5_LOGIN
+        self.mt5_password = mt5_password if mt5_password is not None else DEFAULT_MT5_PASSWORD
+        self.mt5_server = mt5_server if mt5_server is not None else DEFAULT_MT5_SERVER
+        self._initialized = FalseFalse
         
     def _init_mt5(self) -> bool:
         """Initialize MT5 connection with error handling"""
