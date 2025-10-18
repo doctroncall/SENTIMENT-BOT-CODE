@@ -553,7 +553,7 @@ class DataManager:
         
         # Determine frequency based on timeframe
         freq_map = {
-            "D1": "D", "H4": "4H", "H1": "H", "M15": "15min", 
+            "D1": "D", "H4": "4h", "H1": "h", "M15": "15min", 
             "M5": "5min", "M1": "1min"
         }
         freq = freq_map.get(timeframe.upper(), "H")

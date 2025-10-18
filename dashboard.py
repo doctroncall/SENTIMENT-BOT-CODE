@@ -252,7 +252,8 @@ class Dashboard:
     # 3️⃣ FIXED: Add Structure Signals with Error Handling
     # ------------------------------------------
     def _add_structure_signals(self, df_daily: pd.DataFrame, 
-                               timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+                     df["OB_Signal"] = 0.0
+        df["FVG_Signal"] = 0.0]) -> pd.DataFrame:
         """
         FIXED: Analyze structure and create OB_Signal, FVG_Signal columns
         """
