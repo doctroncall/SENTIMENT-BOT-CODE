@@ -769,7 +769,7 @@ class TradingGUI:
                     self.retrainer = AutoRetrain(threshold=threshold, min_samples=min_samples)
                 
                 # Run retraining
-                result = self.retrainer.run()
+                self.retrainer.run_cycle()
                 
                 self.log_retrain("\n" + "="*60)
                 self.log_retrain("✅ Retraining Complete!")
