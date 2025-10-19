@@ -5,13 +5,14 @@ Responsibilities:
 - Connect to MetaTrader5 (MT5) using supplied credentials.
 - Fetch OHLCV for requested symbols and timeframes.
 - Provide resampled multi-timeframe DataFrames for downstream modules.
-- Cache results to disk (data/{symbol}_{tf}.csv).
-
-Fixed Issues:
+- Cache results to disk (data/{symbol}_{tf}.Fixed Issues:
 - Timezone conversion errors
 - Symbol normalization consistency
 - Better error recovery per symbol
-- Data validation improimport os
+- Data validation improvements
+"""
+
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
@@ -19,7 +20,6 @@ import time
 import platform
 
 import pandas as pd
-import numpy as npas pd
 import numpy as np
 
 # Optional dependencies (import inside functions to avoid hard failure)
@@ -507,7 +507,12 @@ class DataManager:
                 logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
                 df = self._create_synthetic_data(start_utc, end_utc, timeframe)
             else:
-                logger.error(f"All data sources failed for {symbol} {timeframe} and synthetic fal    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+                logger.error(f"All data sources failed for {symbol} {timeframe} and synthetic data is disabled")
+                return pd.DataFrame()
+        
+        return df
+
+    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         OPTIMIZED: Clean and validate DataFrame with reduced passes
         
@@ -521,45 +526,38 @@ class DataManager:
         
         # Identify columns once
         numeric_cols = ['open', 'high', 'low', 'close', 'tick_volume']
-        available_numeric = [col for col in numeric_cols if col in df.columns]
         critical_cols = ['open', 'high', 'low', 'close']
-        available_critical = [col for col in critical_cols if col in df.columns]
         
-        initial_len = len(df)
+        # PASS 1: Type conversion and NaN handling (combined)
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # PASS 1: Convert types and drop NaN in one operation
-        # Convert to numeric (coerce errors to NaN)
-        for col in available_numeric:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Drop rows with NaN in critical columns
+        df = df.dropna(subset=critical_cols)
         
-        # Drop rows with NaN in critical columns (after conversion)
-        df = df.dropna(subset=available_critical)
-        
-        if len(df) < initial_len:
-            logger.warning(f"Removed {initial_len - len(df)} rows with NaN/invalid values")
-        
-        # PASS 2: Validate and fix OHLC relationships (if we have complete OHLC data)
-        if len(available_critical) == 4:  # All OHLC columns present
+        # PASS 2: OHLC validation and correction (vectorized)
+        if len(df) > 0 and all(col in df.columns for col in critical_cols):
             # Use NumPy for faster computation
             ohlc_array = df[critical_cols].values
             
             # Vectorized OHLC validation and correction
             correct_highs = np.maximum.reduce([ohlc_array[:, 0], ohlc_array[:, 1], ohlc_array[:, 3]])  # max(o,h,c)
-            correct_lows = np.minimum.reduce([ohlc_array[:, 0], ohlc_array[:, 2], ohlc_array[:, 3]])   # min(o,l,c)
+            correct_lows = np.minimum.reduce([ohlc_array[:, 0], ohlc_array[:, 2], ohlc_array[:, 3]])  # min(o,l,c)
             
-            # Check if any corrections needed
-            invalid_highs = np.sum(ohlc_array[:, 1] < correct_highs)
-            invalid_lows = np.sum(ohlc_array[:, 2] > correct_lows)
+            # Check for invalid relationships
+            invalid_highs = df['high'] < correct_highs
+            invalid_lows = df['low'] > correct_lows
             
-            if invalid_highs + invalid_lows > 0:
-                logger.warning(f"Fixed {invalid_highs + invalid_lows} candles with invalid OHLC relationships")
-                df['high'] = correct_highs
-                df['low'] = correct_lows
+            if invalid_highs.any():
+                df.loc[invalid_highs, 'high'] = correct_highs[invalid_highs]
+            if invalid_lows.any():
+                df.loc[invalid_lows, 'low'] = correct_lows[invalid_lows]
         
         # PASS 3: Remove duplicates and sort (combined operation)
         df = df[~df.index.duplicated(keep='first')].sort_index()
         
-        return df      invalid_count = invalid_highs.sum() + invalid_lows.sum()
+        return df_lows.sum()
             if invalid_count > 0:
                 logger.warning(f"Found {invalid_count} candles with invalid OHLC relationships")
                 # Fix invalid relationships

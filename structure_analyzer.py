@@ -232,23 +232,19 @@ class StructureAnalyzer:
                             'gap_high': low1,  # Top of gap
                             'strength': gap_size,
                             'filled': False,
-                            'timestamp': self.df.index[i + 2] if hasattr(self.df.index, '__getitem    def _check_fvg_fills(self, fvgs: List[Dict]):
+                            'timestamp': self.df.index[i + 2] if hasattr(self.df.index, '__getitem__') else i + 2
+                        })
+
+        return fvgs
+
+    def _check_fvg_fills(self, fvgs: List[Dict]):
         """
         OPTIMIZED: Check if FVGs have been filled using vectorized operations
         
         Previous: O(n*m) - nested loops for each FVG and each candle
         New: O(n) - vectorized NumPy operations per FVG
         
-        Performance improvement: 10-50x faster for large datasets
-        """
-        if not fvgs:
-            return
-        
-        # Pre-extract arrays for vectorized operations
-        lows = self.df['low'].values
-        highs = self.df['high'].values
-        
-        for fvg in fvgs:
+        Performance improvement:         for fvg in fvgs:
             end_idx = fvg['end_index']
             
             # Skip if FVG is at the end of data
@@ -275,8 +271,7 @@ class StructureAnalyzer:
             
             if len(filled_indices) > 0:
                 fvg['filled'] = True
-                fvg['fill_index'] = end_idx + 1 + filled_indices[0]     else:  # bearish
-                    # Bearish FVG filled if price comes back up into gap
+                fvg['fill_index'] = end_idx + 1 + filled_indices[0]              # Bearish FVG filled if price comes back up into gap
                     if candle_high >= gap_low:
                         fvg['filled'] = True
                         fvg['fill_index'] = i
@@ -403,26 +398,36 @@ class StructureAnalyzer:
 
         # FIXED: More efficient clustering algorithm
         high_clusters = self._cluster_levels(highs, dynamic_tolerance, min_touches)
-        low_clusters = self._cluster_levels(lows, dynamic_tolerance, min_touches)
-
-        for level, indices in high_clusters.items():
-            liquidity_highs.append({
+        low_clusters = self._cluster_levels(lows,         for level, indices in low_clusters.items():
+            liquidity_lows.append({
                 'level': level,
                 'touches': len(indices),
                 'indices': indices,
-                'strength': len(indices) / len(highs),  # Relative strength
-                'type': 'resistance'
+                'strength': len(indices) / len(lows),  # Relative strength
+                'type': 'support'
             })
 
-        for level, indices in low_clusters.items():
-            l    def _cluster_levels(self, levels: np.ndarray, tolerance: float, min_touches: int) -> Dict[float, List[int]]:
+        self.structure['liquidity_highs'] = liquidity_highs
+        self.structure['liquidity_lows'] = liquidity_lows
+        
+        return liquidity_highs, liquidity_lows
+
+    def _cluster_levels(self, levels: np.ndarray, tolerance: float, min_touches: int) -> Dict[float, List[int]]:
         """
         OPTIMIZED: Cluster price levels within tolerance using O(n log n) algorithm
         
-        Previous implementation: O(n²) - nested loops through all levels
+        Previous implementation: O(n^2) - nested loops through all levels
         New implementation: O(n log n) - sort once, then linear scan
         
-        Performance improvement: 10-100x faster for large datasets
+        Performance improvement: 10-100 times faster for large datasets
+        """ int) -> Dict[float, List[int]]:
+        """
+        OPTIMIZED: Cluster price levels within tolerance using O(n log n) algorithm
+        
+        Previous implementation: O(n^2) - nested loops through all levels
+        New implementation: O(n log n) - sort once, then linear scan
+        
+        Performance improvement: 10-100 times faster for large datasets
         """
         if len(levels) == 0:
             return {}
@@ -442,20 +447,10 @@ class StructureAnalyzer:
             
             # Collect all levels within tolerance (they're consecutive in sorted array)
             max_level = cluster_start * (1 + tolerance)
-            while j < len(sorted_levels) and sorted_levels[j] <= max_level:
-                cluster_indices.append(sorted_indices[j])
-                j += 1
-            
-            # Only add cluster if it meets minimum touches requirement
-            if len(cluster_indices) >= min_touches:
-                avg_level = np.mean([levels[idx] for idx in cluster_indices])
-                clusters[avg_level] = cluster_indices
-            
-            # Move to next unprocessed level
+            while j < len(sorted_levels) and sorted_levels[j] <=             # Move to next unprocessed level
             i = j if j > i + 1 else i + 1
         
-        return clustersnumerate(levels):
-                if j not in used_indices and abs(level - other_level) <= tolerance * level:
+        return clustersindices and abs(level - other_level) <= tolerance * level:
                     similar_indices.append(j)
                     used_indices.add(j)
             

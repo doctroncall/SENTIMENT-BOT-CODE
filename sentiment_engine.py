@@ -4,13 +4,18 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import os
-from typing import Dict, Tuple, Opticlass SentimentEngine:
+from typing import Dict, Tuple, Optional
+
+
+class SentimentEngine:
     def __init__(self, weights_file="config/rule_weights.json"):
         self.weights_file = weights_file
         self.weights = self.load_weights()
         self._ensure_config_dir()
         # Cache indicator key mappings for performance
-        self._build_indicator_map()config_d    def _ensure_config_dir(self):
+        self._build_indicator_map()
+    
+    def _ensure_config_dir(self):
         """Ensure config directory exists"""
         config_dir = os.path.dirname(self.weights_file)
         if config_dir and not os.path.exists(config_dir):
@@ -25,7 +30,7 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
         self._indicator_map = {
             key.replace("_weight", ""): key 
             for key in self.weights.keys()
-        }config_dir}")
+        }
 
     # ------------------------------------------
     # 1️⃣ IMPROVED: Load adaptive rule weights
@@ -241,20 +246,14 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
                     bias_scores["fvg"] = fvg_signal * 1.2
                 else:
                     bias_scores["fvg"] = fvg_signal * 0.8
-                
-                bias_scores["fvg"] = np.clip(bias_scores["fvg"], -1, 1)
-
-        except Exception as e:
-            print(f"❌ Error computing indicator biases: {e}")
-            # Return neutral biases on error
-            bias_scores = {
+                  bias_scores = {
                 "ema_trend": 0,
                 "rsi_momentum": 0,
                 "macd": 0,
                 "order_block": 0,
                 "fvg": 0
             }
-
+            
         return bias_scores
 
     def _determine_trend_context(self, df) -> str:
@@ -262,35 +261,46 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
         FIXED: Determine overall trend context for better indicator interpretation
         """
         if len(df) < 50:
+            return "neutral"neutral biases on error
+            bias_scores = {
+                "ema_trend": 0,
+                "rsi_momentum": 0,
+                "macd": 0,
+                "order_block        if len(df) < 50:
             return "neutral"
         
         try:
+            # Get current close and EMA_200
             current_close = df["close"].iloc[-1]
-            ema_200 = df["EMA_200"].iloc[-1]
+            ema_200 = df.get("EMA_200", pd.Series([pd.NA])).iloc[-1] if "EMA_200" in df.columns else pd.NA
             
             # Price position relative to EMA
             if not pd.isna(ema_200):
                 if current_close > ema_200 * 1.01:  # 1% above
                     # Check if recent trend is up
                     recent_close_avg = df["close"].tail(10).mean()
-                    older_close_avg = df["close"].iloc[-20:-10].mean()
-                    
-                    if recent_close_avg > older_close_avg:
-                        return "uptrend"
+                    if recent_close_avg > ema_200:
+                        return "bullish"
                     else:
                         return "neutral"
                         
                 elif current_close < ema_200 * 0.99:  # 1% below
                     # Check if recent trend is down
                     recent_close_avg = df["close"].tail(10).mean()
-                    older_close_avg = df["close"].iloc[-20:-10].mean()
-                    
-                    if recent_close_avg < older_close_avg:
-                        return "downtrend"
+                    if recent_close_avg < ema_200: older_clos                elif current_close < ema_200 * 0.99:  # 1% below
+                    # Check if recent trend is down
+                    recent_close_avg = df["close"].tail(10).mean()
+                    if recent_close_avg < ema_200:
+                        return "bearish"
                     else:
                         return "neutral"
             
             return "neutral"
+            
+        except Exception as e:           elif current_close < ema_200 * 0.99:  # 1% below
+                    # Check if recent trend is down
+                    recent_close_avg = df["close"].tail(10).mean()
+                      return "neutral"
             
         except Exception as e:
             print(f"⚠️ Error determining trend context: {e}")
@@ -300,7 +310,26 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
     # 3️⃣ FIXED: Compute Weighted Sentiment with Better Confidence
     # ------------------------------------------
     def compute_weighted_sentiment(self, df):
-        """FIXED: C            if total_weight == 0:
+        """
+        FIXED: Compute weighted sentiment with optimized indicator mapping
+        Returns: (bias, confidence, scores, final_score)
+        """           
+            return "neutral"
+            
+        except     def compute_weighted_sentiment(self, df):
+        """
+        FIXED: Compute weighted sentiment with optimized indicator mapping
+        Returns: (bias, confidence, scores, final_score)
+        """
+        try:
+            # Step 1: Compute individual indicator scores
+            scores = self.compute_indicator_bias(df)
+            
+            # Step 2: Calculate weighted sum
+            weighted_sum = 0.0
+            total_weight = sum(self.weights.values())
+            
+            if total_weight == 0:
                 print("⚠️ Zero total weight, using equal weights")
                 self.weights = {k: 0.2 for k in self.weights}
                 total_weight = 1.0
@@ -312,13 +341,7 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
                     score = scores[indicator_name]
                     weighted_sum += self.weights[weight_key] * score
                 else:
-                    print(f"⚠️ Missing score for {indicator_name}"):
-                indicator_key = key.replace("_weight", "")
-                if indicator_key in scores:
-                    score = scores[indicator_key]
-                    weighted_sum += weight * score
-                else:
-                    print(f"⚠️ Missing score for {indicator_key}")
+                    print(f"⚠️ Missing score for {indicator_name}")
 
             final_score = weighted_sum / total_weight
             
@@ -329,6 +352,12 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
             bias = self._determine_bias(final_score, confidence, scores)
             
             self._print_sentiment_summary(df, scores, final_score, bias, confidence)
+            
+            return bias, confidence, scores, final_score
+            
+        except Exception as e:
+            print(f"❌ Error in sentiment calculation: {e}")
+            return "Neutral", 0.0, {}, 0.0        self._print_sentiment_summary(df, scores, final_score, bias, confidence)
             
             return bias, confidence, scores, final_score
             
