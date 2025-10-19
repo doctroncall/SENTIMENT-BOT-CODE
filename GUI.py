@@ -11,8 +11,18 @@ Features:
 - Configure system settings
 """
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+try:
+    import tkinter as tk
+    from tkinter import ttk, scrolledtext, messagebox, filedialog
+    TK_AVAILABLE = True
+except Exception:
+    # Allow importing this module on systems without Tkinter (e.g., minimal Linux)
+    TK_AVAILABLE = False
+    tk = None  # type: ignore
+    ttk = None  # type: ignore
+    scrolledtext = None  # type: ignore
+    messagebox = None  # type: ignore
+    filedialog = None  # type: ignore
 import threading
 import queue
 from datetime import datetime, timedelta
@@ -969,6 +979,12 @@ class TradingGUI:
 
 def main():
     """Main entry point"""
+    if not TK_AVAILABLE:
+        print("❌ Tkinter (tk) is not available on this system.\n"
+              "Install the OS package for Tk (e.g., 'sudo apt-get install python3-tk' on Debian/Ubuntu)\n"
+              "or use the Streamlit UI with: streamlit run gui.py")
+        sys.exit(1)
+
     root = tk.Tk()
     app = TradingGUI(root)
     
