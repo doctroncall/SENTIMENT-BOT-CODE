@@ -129,23 +129,15 @@ class Dashboard:
             print(f"📊 Fetching data for {symbol}...")
             timeframe_data = self.data_manager.get_symbol_data(
                 symbol, 
-                timeframes=["D1", "H4", "H1"], 
-                lookback_days=250  # FIXED: Increased for EMA_200
-            )
-            
-            if not timeframe_data:
-                print(f"❌ No data retrieved for {symbol}")
-                return None
-            
-            # Use daily data as primary timeframe
+                      # Use daily data as primary timeframe
             df_daily = timeframe_data.get("D1")
             if df_daily is None or df_daily.empty:
                 print(f"⚠️ No daily data for {symbol} - skipping")
-                return None
-            
-            # FIXED: Validate sufficient data
-            if len(df_daily) < 200:
-                print(f"⚠️ Insufficient data for {symbol} ({len(df_daily)} bars < 200 required)")
+                ret                print(f"⚠️ Insufficient data for {symbol} ({len(df_daily)} bars < 200 required)")
+            try:
+                from             except ValueError as e:
+                print(f"❌ Data validation failed for {symbol}: {e}")
+                return Noneata for {symbol} ({len(df_daily)} bars < 200 required)")
                 print(f"   Proceeding with limited indicator accuracy...")
             
             # Step 2: Add technical indicators
@@ -243,13 +235,8 @@ class Dashboard:
             # Check for excessive NaN values
             nan_pct = df[indicator].isna().sum() / len(df) * 100
             if nan_pct > 50:
-                print(f"   ⚠️ {indicator} has {nan_pct:.1f}% NaN values")
-                return False
-        
-        return True
-
-    # ------------------------------------------
-    # 3️⃣ FIXED: Add Structure Signals with Error Handling
+                print(f"   ⚠️ {indicator} has    def _add_structure_signals(self, df_daily: pd.DataFrame, 
+                              timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:IXED: Add Structure Signals with Error Handling
     # ------------------------------------------
     def _add_structure_signals(self, df_daily: pd.DataFrame, 
                      df["OB_Signal"] = 0.0

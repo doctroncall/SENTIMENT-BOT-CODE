@@ -51,8 +51,7 @@ class Verifier:
 
     # ------------------------------------------
     # 1️⃣ IMPROVED: Load Pending Verifications
-    # ------------------------------------------
-    def load_pending(self) -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
+    # ------------    def load_pending(self) -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
         """Load pending verifications with better error handling"""
         if not os.path.exists(self.excel_file):
             print("⚠️ No sentiment log found yet.")
@@ -61,11 +60,17 @@ class Verifier:
         try:
             df = pd.read_excel(self.excel_file)
             
+            # Validate DataFrame
+            if df.empty:
+                print("⚠️ Excel file is empty")
+                return None
+            
             # Check if required columns exist
             required_cols = ["Date", "Symbol", "Final Bias", "Verified"]
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
                 print(f"⚠️ Missing required columns: {missing_cols}")
+                return None {missing_cols}")
                 return None
                 
             # Filter pending verifications

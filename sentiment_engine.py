@@ -54,21 +54,29 @@ class SentimentEngine:
         }
 
     # ------------------------------------------
-    # 2️⃣ FIXED: Compute Indicator Bias Scores with Context
-    # ------------------------------------------
-    def compute_indicator_bias(self, df):
+    # 2️⃣ FIXED: Compute Indicator Bias Scores with C    def compute_indicator_bias(self, df):
         """
         FIXED: Compute bias scores with trend context and improved logic
         Expects DataFrame with required columns.
         """
-        if df.empty:
+        if df is None or df.empty:
             raise ValueError("❌ Empty DataFrame provided to sentiment engine")
 
-        # Validate required columns
+        # Validate required columns with better error handling
         required_columns = ["close", "EMA_200", "RSI", "MACD", "MACD_Signal", "OB_Signal", "FVG_Signal"]
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            raise ValueError(f"❌ Missing required columns: {missing_columns}")
+            print(f"⚠️ Missing columns: {missing_columns}. Using defaults where possible.")
+            # Set default values for missing columns
+            for col in missing_columns:
+                if col == "EMA_200":
+                    df[col] = df["close"].rolling(window=min(200, len(df))).mean()
+                elif col == "RSI":
+                    df[col] = 50  # Neutral RSI
+                elif col in ["MACD", "MACD_Signal"]:
+                    df[col] = 0
+                elif col in ["OB_Signal", "FVG_Signal"]:
+                    df[col] = 0    raise ValueError(f"❌ Missing required columns: {missing_columns}")
 
         bias_scores = {}
 
