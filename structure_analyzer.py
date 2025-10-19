@@ -3,8 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-class StructureAnalyzer:
-    def __init__(self, df: pd.DataFrame):
+class StructureAnaly    def __init__(self, df: pd.DataFrame):
         """
         FIXED: Improved initialization with validation
         df: expects columns ['open', 'high', 'low', 'close'] with datetime index
@@ -18,12 +17,21 @@ class StructureAnalyzer:
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
         
+        # Validate data quality
+        if len(df) < 10:
+            raise ValueError(f"Insufficient data: {len(df)} rows (minimum 10 required)")
+        
+        # Check for excessive NaN values
+        nan_pct = df[required_cols].isna().sum().sum() / (len(df) * len(required_cols)) * 100
+        if nan_pct > 30:
+            print(f"⚠️ High NaN percentage: {nan_pct:.1f}% - results may be unreliable")
+        
         self.df = df.copy()
         self.swings = []
         self.structure = {}
         
         # Calculate ATR for dynamic thresholds
-        self._calculate_atr()
+        self._calculate_atr()    self._calculate_atr()
 
     def _calculate_atr(self, period: int = 14):
         """Calculate Average True Range for dynamic thresholds"""

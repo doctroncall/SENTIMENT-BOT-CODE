@@ -17,9 +17,7 @@ Fixed Issues:
 import os
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Union
-import time
-import platform
+from typing import Dict, List, Optional,import platformtform
 import platform
 
 import pandas as pd
@@ -97,11 +95,7 @@ def normalize_symbol(symbol: str) -> str:
     FIXED: Centralized symbol normalization for consistency across the system
     """
     if not symbol:
-        return ""
-    return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
-
-
-def safe_timestamp_conversion(dt: datetime) -> int:
+        def safe_timestamp_conversion(dt: datetime) -> int:
     """
     FIXED: Safely convert datetime to timestamp handling timezone awareness
     """
@@ -111,6 +105,30 @@ def safe_timestamp_conversion(dt: datetime) -> int:
     # If already timezone-aware, use directly
     if dt.tzinfo is not None:
         return int(dt.timestamp())
+    
+    # If naive, assume UTC
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def ensure_utc_timezone(dt: datetime) -> datetime:
+    """
+    Ensure datetime is UTC timezone-aware
+    
+    Args:
+        dt: Input datetime (timezone-aware or naive)
+        
+    Returns:
+        datetime: UTC timezone-aware datetime
+    """
+    if dt is None:
+        return datetime.now(timezone.utc)
+    
+    if dt.tzinfo is None:
+        # If naive, assume UTC
+        return dt.replace(tzinfo=timezone.utc)
+    
+    # Convert to UTC if not already
+    return dt.astimezone(timezone.utc)nt(dt.timestamp())
     
     # If naive, assume UTC
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
@@ -145,15 +163,46 @@ def _mt5_df_from_rates(rates) -> pd.DataFrame:
         available_cols = [col for col in COLUMNS if col in df.columns]
         if not available_cols:
             logger.error("No valid columns found in MT5 data")
-            return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-            
-        df = df[available_cols]
-        df = df.set_index("time")
+            return pd.DataFrame(columns=COLUMNdef _get_yahoo_symbol(mt5_symbol: str) -> str:
+    """Get Yahoo Finance symbol equivalent"""
+    normalized = normalize_symbol(mt5_symbol)
+    return SYMBOL_MAPPING.get(normalized, f"{normalized}=X")
+
+
+def validate_dataframe(df: pd.DataFrame, required_columns: List[str], min_rows: int = 50) -> bool:
+    """
+    Validate DataFrame structure before processing
     
-    return df
-
-
-def _get_yahoo_symbol(mt5_symbol: str) -> str:
+    Args:
+        df: DataFrame to validate
+        required_columns: List of required column names
+        min_rows: Minimum number of rows required
+        
+    Returns:
+        bool: True if valid, raises ValueError if invalid
+        
+    Raises:
+        ValueError: If DataFrame is invalid
+    """
+    if df is None:
+        raise ValueError("DataFrame is None")
+    
+    if df.empty:
+        raise ValueError("DataFrame is empty")
+    
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    if len(df) < min_rows:
+        raise ValueError(f"Insufficient data: {len(df)} rows (minimum {min_rows} required)")
+    
+    # Check for excessive NaN values
+    nan_pct = df[required_columns].isna().sum().sum() / (len(df) * len(required_columns)) * 100
+    if nan_pct > 50:
+        raise ValueError(f"Too many NaN values: {nan_pct:.1f}%")
+    
+    return True
     """Get Yahoo Finance symbol equivalent"""
     normalized = normalize_symbol(mt5_symbol)
     return SYMBOL_MAPPING.get(normalized, f"{normalized}=X")

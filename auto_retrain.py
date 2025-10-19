@@ -22,8 +22,7 @@ class AutoRetrain:
 
     # ------------------------------------------
     # 1️⃣ IMPROVED: Load Verification History
-    # ------------------------------------------
-    def load_history(self) -> pd.DataFrame:
+    # -------------------    def load_history(self) -> pd.DataFrame:
         """Load verification history with enhanced validation"""
         if not os.path.exists(self.excel_file):
             raise FileNotFoundError(f"No sentiment log found at {self.excel_file}")
@@ -31,9 +30,13 @@ class AutoRetrain:
         try:
             self.df = pd.read_excel(self.excel_file)
             
+            # Validate DataFrame
+            if self.df.empty:
+                raise ValueError("Excel file is empty")
+            
             # Check if we have verification data
             if "Verified" not in self.df.columns:
-                raise ValueError("No 'Verified' column found in the data")
+                raise ValueError("No 'Verified' column found in the data")erified' column found in the data")
                 
             # FIXED: More flexible verification status detection
             verified_mask = self.df["Verified"].astype(str).str.contains(
