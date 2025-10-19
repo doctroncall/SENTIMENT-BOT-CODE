@@ -41,11 +41,15 @@ except ImportError:
 # ----------------------------
 # CONFIG (DEV / HARDCODED)
 # ----------------------------
-# DEV/demo credentials
-MT5_LOGIN = 61420404
-MT5_PASSWORD = "armC3ie$hx"
-MT5_SERVER = "Pepperstone-Demo"
-MT5_PATH = r"C:\Program Files\Pepperstone MetaTrader 5\terminal64.exe"
+# DEV/demo credentials (pull from environment; avoid hardcoded secrets)
+# Examples:
+#   export MT5_LOGIN=12345678
+#   export MT5_PASSWORD="your-password"
+#   export MT5_SERVER="YourBroker-Server"
+MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0") or 0)
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
+MT5_SERVER = os.getenv("MT5_SERVER", "")
+MT5_PATH = os.getenv("MT5_PATH", r"C:\\Program Files\\Pepperstone MetaTrader 5\\terminal64.exe")
 
 # Data cache folder
 DATA_DIR = "data"
@@ -487,10 +491,17 @@ class DataManager:
             except Exception as e:
                 logger.error(f"yfinance fallback failed for {symbol}: {e}")
 
-        # FIXED: Final fallback - create synthetic data only for testing
+        # FIXED: Final fallback - create synthetic data only if allowed
         if df.empty:
-            logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
-            df = self._create_synthetic_data(start_utc, end_utc, timeframe)
+            allow_synth_env = os.getenv("ALLOW_SYNTHETIC_DATA", "1").strip().lower()
+            allow_synth = allow_synth_env in ("1", "true", "yes", "on")
+            if allow_synth:
+                logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
+                df = self._create_synthetic_data(start_utc, end_utc, timeframe)
+            else:
+                logger.error(
+                    "All data sources failed and synthetic data is disabled (ALLOW_SYNTHETIC_DATA=0)."
+                )
             
         # FIXED: Clean and validate data
         if not df.empty:

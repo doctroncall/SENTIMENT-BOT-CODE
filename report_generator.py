@@ -354,18 +354,19 @@ class ReportGenerator:
         today = datetime.date.today().strftime("%Y-%m-%d")
         
         try:
-            # Create new record
+            # Create new record (column names aligned with Dashboard/SentimentEngine)
             record = {
                 "Date": today,
                 "Symbol": symbol,
                 "Final Bias": sentiment_data['final_bias'],
                 "Confidence": round(sentiment_data['final_confidence'], 4),
                 "Weighted Score": round(sentiment_data.get('final_score', 0), 4),
-                "EMA_Bias": sentiment_data.get('ema_bias', 0),
-                "RSI_Bias": sentiment_data.get('rsi_bias', 0),
-                "MACD_Bias": sentiment_data.get('macd_bias', 0),
-                "OB_Bias": sentiment_data.get('ob_bias', 0),
-                "FVG_Bias": sentiment_data.get('fvg_bias', 0),
+                # Use space-separated column names to match existing logs
+                "EMA Bias": sentiment_data.get('ema_bias', 0),
+                "RSI Bias": sentiment_data.get('rsi_bias', 0),
+                "MACD Bias": sentiment_data.get('macd_bias', 0),
+                "OB Bias": sentiment_data.get('ob_bias', 0),
+                "FVG Bias": sentiment_data.get('fvg_bias', 0),
                 "Reason_Summary": self._create_reason_summary(sentiment_data),
                 "Verified": "Pending",
                 "Report_Generated": "Yes",

@@ -14,12 +14,14 @@ except ImportError:
     MT5_AVAILABLE = False
 
 class Verifier:
-    def __init__(self, excel_file="sentiment_log.xlsx", mt5_login=61420404, 
-                 mt5_password="armC3ie$hx", mt5_server="Pepperstone-Demo"):
+    def __init__(self, excel_file="sentiment_log.xlsx", mt5_login=None, 
+                 mt5_password=None, mt5_server=None):
         self.excel_file = excel_file
-        self.mt5_login = mt5_login
-        self.mt5_password = mt5_password
-        self.mt5_server = mt5_server
+        # Pull MT5 creds from environment by default to avoid hardcoding
+        import os as _os
+        self.mt5_login = int(mt5_login if mt5_login is not None else (_os.getenv("MT5_LOGIN", "0") or 0))
+        self.mt5_password = mt5_password if mt5_password is not None else _os.getenv("MT5_PASSWORD", "")
+        self.mt5_server = mt5_server if mt5_server is not None else _os.getenv("MT5_SERVER", "")
         self._initialized = False
         
     def _init_mt5(self) -> bool:

@@ -6,10 +6,18 @@ from typing import List, Tuple, Optional
 
 import pandas as pd
 
+# Make Streamlit optional at import-time to avoid hard failures during checks
 try:
-    import streamlit as st
-except Exception as e:
-    raise RuntimeError("Streamlit is required to run the GUI. Install with: pip install streamlit") from e
+    import streamlit as st  # type: ignore
+    STREAMLIT_AVAILABLE = True
+except Exception:
+    STREAMLIT_AVAILABLE = False
+    class _StreamlitStub:
+        def __getattr__(self, _):
+            raise RuntimeError(
+                "Streamlit is required to run this GUI. Install with: pip install streamlit"
+            )
+    st = _StreamlitStub()  # type: ignore
 
 # Local imports
 from dashboard import Dashboard
@@ -101,6 +109,12 @@ def render_reports_section(report_dir: str) -> None:
 
 
 def main() -> None:
+    if not STREAMLIT_AVAILABLE:
+        raise RuntimeError(
+            "Streamlit is required to run this GUI. Install with: pip install streamlit\n"
+            "Or run via: streamlit run gui.py"
+        )
+
     st.set_page_config(page_title="Trading Bot Dashboard", layout="wide")
     st.title("🤖 Trading Bot Dashboard")
 
