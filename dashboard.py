@@ -240,19 +240,19 @@ class Dashboard:
                 print(f"   ⚠️ Missing indicator: {indicator}")
                 return False
             
-            # Check for excess    # ------------------------------------------
+            
+            # Check for excessive NaN values
+            if df[indicator].isna().sum() > len(df) * 0.5:
+                print(f"   ⚠️ Indicator {indicator} has >50% NaN values")
+                return False
+        
+        return True
+
+    # ------------------------------------------
     # 3️⃣ FIXED: Add Structure Signals with Error Handling
     # ------------------------------------------
     def _add_structure_signals(self, df_daily: pd.DataFrame, 
                                timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """
-        FIXED: Analyze structure and create OB_Signal, FVG_Signal columns
-        """
-        df = df_daily.copy()
-        
-        # Initialize with neutral signals
-        df["OB_Signal"] = 0
-        df["FVG_Signal"] = 0]) -> pd.DataFrame:
         """
         FIXED: Analyze structure and create OB_Signal, FVG_Signal columns
         """
