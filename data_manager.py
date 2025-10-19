@@ -11,18 +11,15 @@ Fixed Issues:
 - Timezone conversion errors
 - Symbol normalization consistency
 - Better error recovery per symbol
-- Data validation improvements
-"""
-
-import os
+- Data validation improimport os
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
 import platform
-import platform
 
 import pandas as pd
+import numpy as npas pd
 import numpy as np
 
 # Optional dependencies (import inside functions to avoid hard failure)
