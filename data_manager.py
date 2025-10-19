@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
+import platform
+import platform
 
 import pandas as pd
 import numpy as np
@@ -401,8 +403,22 @@ class DataManager:
             cache_start = df_cache.index.min()
             cache_end = df_cache.index.max()
             
-            # Allow some tolerance (1 day)
-            if cache_start <= start_utc and cache_end >= end_utc - timedelta(days=1):
+            # Allow timeframe-aware tolerance instead of fixed 1 day
+            basename = os.path.basename(cache_path)
+            tf_part = basename.rsplit("_", 1)[-1].split(".", 1)[0].upper()
+            tolerance_map = {
+                "M1": timedelta(hours=2),
+                "M5": timedelta(hours=12),
+                "M15": timedelta(days=1),
+                "H1": timedelta(days=2),
+                "H4": timedelta(days=3),
+                "D1": timedelta(days=2),
+                "W1": timedelta(days=14),
+                "MN1": timedelta(days=60),
+            }
+            tolerance = tolerance_map.get(tf_part, timedelta(days=1))
+
+            if cache_start <= start_utc and cache_end >= end_utc - tolerance:
                 logger.info(f"Loaded from cache: {cache_path} ({len(df_cache)} bars)")
                 return df_cache
             else:
@@ -489,8 +505,12 @@ class DataManager:
 
         # FIXED: Final fallback - create synthetic data only for testing
         if df.empty:
-            logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
-            df = self._create_synthetic_data(start_utc, end_utc, timeframe)
+            allow_synthetic = bool(os.getenv("ALLOW_SYNTHETIC_DATA", "1") not in ("0", "false", "False"))
+            if allow_synthetic:
+                logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
+                df = self._create_synthetic_data(start_utc, end_utc, timeframe)
+            else:
+                logger.error(f"All data sources failed for {symbol} {timeframe} and synthetic fallback is disabled.")
             
         # FIXED: Clean and validate data
         if not df.empty:
@@ -621,7 +641,7 @@ class DataManager:
                     results[tf] = df
                     logger.info(f"✅ {symbol} {tf}: {len(df)} bars")
                 else:
-                    logger.warning(f⚠️ No data for {symbol} {tf}")
+                    logger.warning(f"⚠️ No data for {symbol} {tf}")
                     
             except Exception as e:
                 logger.error(f"❌ Failed to fetch {symbol} {tf}: {e}")
