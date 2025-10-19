@@ -1,9 +1,9 @@
-# structure_analyzer.py - FIXED VERSION
-import pandas as pd
+# structure_analyzer.py - FIXED VERSIONimport pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-class StructureAnaly    def __init__(self, df: pd.DataFrame):
+class StructureAnalyzer:
+    def __init__(self, df: pd.DataFrame):
         """
         FIXED: Improved initialization with validation
         df: expects columns ['open', 'high', 'low', 'close'] with datetime index
@@ -31,7 +31,7 @@ class StructureAnaly    def __init__(self, df: pd.DataFrame):
         self.structure = {}
         
         # Calculate ATR for dynamic thresholds
-        self._calculate_atr()    self._calculate_atr()
+        self._calculate_atr()atr()
 
     def _calculate_atr(self, period: int = 14):
         """Calculate Average True Range for dynamic thresholds"""

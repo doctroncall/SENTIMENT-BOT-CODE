@@ -11,13 +11,12 @@ Fixed Issues:
 - Timezone conversion errors
 - Symbol normalization consistency
 - Better error recovery per symbol
-- Data validation improvements
-"""
-
-import os
+- Data validation improimport os
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional,import platformtform
+from typing import Dict, List, Optional, Union
+import time
+import platformorm
 import platform
 
 import pandas as pd
@@ -88,14 +87,14 @@ COLUMNS = ["time", "open", "high", "low", "close", "tick_volume"]
 
 
 # ----------------------------
-# FIXED: Centralized Utility Functions
-# ----------------------------
-def normalize_symbol(symbol: str) -> str:
-    """
-    FIXED: Centralized symbol normalization for consistency across the system
+# FIXED: Centralized Utility Functio    FIXED: Centralized symbol normalization for consistency across the system
     """
     if not symbol:
-        def safe_timestamp_conversion(dt: datetime) -> int:
+        return ""
+    return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+
+
+def safe_timestamp_conversion(dt: datetime) -> int:
     """
     FIXED: Safely convert datetime to timestamp handling timezone awareness
     """
@@ -128,7 +127,7 @@ def ensure_utc_timezone(dt: datetime) -> datetime:
         return dt.replace(tzinfo=timezone.utc)
     
     # Convert to UTC if not already
-    return dt.astimezone(timezone.utc)nt(dt.timestamp())
+    return dt.astimezone(timezone.utc)
     
     # If naive, assume UTC
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
@@ -156,14 +155,19 @@ def _mt5_df_from_rates(rates) -> pd.DataFrame:
             "real_volume": "tick_volume"
         }
         
-        # Rename columns if they exist
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        
-        # Ensure we have the required columns
+        # Rename columns if th        # Ensure we have the required columns
         available_cols = [col for col in COLUMNS if col in df.columns]
         if not available_cols:
             logger.error("No valid columns found in MT5 data")
-            return pd.DataFrame(columns=COLUMNdef _get_yahoo_symbol(mt5_symbol: str) -> str:
+            return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+            
+        df = df[available_cols]
+        df = df.set_index("time")
+    
+    return df
+
+
+def _get_yahoo_symbol(mt5_symbol: str) -> str:
     """Get Yahoo Finance symbol equivalent"""
     normalized = normalize_symbol(mt5_symbol)
     return SYMBOL_MAPPING.get(normalized, f"{normalized}=X")
@@ -202,8 +206,7 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str], min_rows: 
     if nan_pct > 50:
         raise ValueError(f"Too many NaN values: {nan_pct:.1f}%")
     
-    return True
-    """Get Yahoo Finance symbol equivalent"""
+    return Truequivalent"""
     normalized = normalize_symbol(mt5_symbol)
     return SYMBOL_MAPPING.get(normalized, f"{normalized}=X")
 

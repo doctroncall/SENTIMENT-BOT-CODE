@@ -46,12 +46,10 @@ class Verifier:
             return True
             
         except Exception as e:
-            print(f"❌ MT5 connection error: {e}")
-            return False
-
-    # ------------------------------------------
+            print(f"❌ MT5 connection error: {e}")    # ------------------------------------------
     # 1️⃣ IMPROVED: Load Pending Verifications
-    # ------------    def load_pending(self) -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
+    # ------------------------------------------
+    def load_pending(self) -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
         """Load pending verifications with better error handling"""
         if not os.path.exists(self.excel_file):
             print("⚠️ No sentiment log found yet.")
@@ -70,7 +68,7 @@ class Verifier:
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
                 print(f"⚠️ Missing required columns: {missing_cols}")
-                return None {missing_cols}")
+                return None}")
                 return None
                 
             # Filter pending verifications

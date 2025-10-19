@@ -49,12 +49,10 @@ class SentimentEngine:
             "ema_trend_weight": 0.25,
             "rsi_momentum_weight": 0.20,
             "macd_weight": 0.15,
-            "order_block_weight": 0.25,
-            "fvg_weight": 0.15
-        }
-
+            "order_block_weight    # ------------------------------------------
+    # 2️⃣ FIXED: Compute Indicator Bias Scores with Context
     # ------------------------------------------
-    # 2️⃣ FIXED: Compute Indicator Bias Scores with C    def compute_indicator_bias(self, df):
+    def compute_indicator_bias(self, df):
         """
         FIXED: Compute bias scores with trend context and improved logic
         Expects DataFrame with required columns.
@@ -76,7 +74,7 @@ class SentimentEngine:
                 elif col in ["MACD", "MACD_Signal"]:
                     df[col] = 0
                 elif col in ["OB_Signal", "FVG_Signal"]:
-                    df[col] = 0    raise ValueError(f"❌ Missing required columns: {missing_columns}")
+                    df[col] = 0eError(f"❌ Missing required columns: {missing_columns}")
 
         bias_scores = {}
 

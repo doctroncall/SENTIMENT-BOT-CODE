@@ -129,16 +129,15 @@ class Dashboard:
             print(f"📊 Fetching data for {symbol}...")
             timeframe_data = self.data_manager.get_symbol_data(
                 symbol, 
-                      # Use daily data as primary timeframe
-            df_daily = timeframe_data.get("D1")
-            if df_daily is None or df_daily.empty:
+                tim            if not timeframe_data:
+                print(f"❌ No data retrieved for {symbol}")
+                r            if df_daily is None or df_daily.empty:
                 print(f"⚠️ No daily data for {symbol} - skipping")
-                ret                print(f"⚠️ Insufficient data for {symbol} ({len(df_daily)} bars < 200 required)")
-            try:
-                from             except ValueError as e:
-                print(f"❌ Data validation failed for {symbol}: {e}")
-                return Noneata for {symbol} ({len(df_daily)} bars < 200 required)")
-                print(f"   Proceeding with limited indicator accuracy...")
+                return None
+            
+            # FIXED: Validate sufficient data
+            if len(df_daily) < 200:
+                print(f"⚠️ Insufficient data for {symbol} ({len(df_daily)} bars < 200 required)")
             
             # Step 2: Add technical indicators
             print(f"📈 Calculating technical indicators...")
@@ -235,13 +234,13 @@ class Dashboard:
             # Check for excessive NaN values
             nan_pct = df[indicator].isna().sum() / len(df) * 100
             if nan_pct > 50:
-                print(f"   ⚠️ {indicator} has    def _add_structure_signals(self, df_daily: pd.DataFrame, 
-                              timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:IXED: Add Structure Signals with Error Handling
-    # ------------------------------------------
-    def _add_structure_signals(self, df_daily: pd.DataFrame, 
-                     df["OB_Signal"] = 0.0
-        df["FVG_Signal"] = 0.0]) -> pd.DataFrame:
+                print(f"   ⚠️ {indicator} has {nan_pct:.1f}% NaN values")
+            def _add_structure_signals(self, df_daily: pd.DataFrame, 
+                              timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
+        FIXED: Analyze structure and create OB_Signal, FVG_Signal columns
+        """timeframe_data: Dict[str, pd.DataFrame]) -> pd.DataFrame:h Error Handling
+    # ------------------------------------------
         FIXED: Analyze structure and create OB_Signal, FVG_Signal columns
         """
         df = df_daily.copy()
@@ -538,6 +537,7 @@ class Dashboard:
     def schedule_daily_runs(self, analysis_hour: int = 5, verify_hour: int = 23):
         """
         FIXED: Schedule with better state management
+        """
         """
         print(f"\n🕒 Daily scheduler active")
         print(f"   Analysis: {analysis_hour:02d}:00 UTC")
