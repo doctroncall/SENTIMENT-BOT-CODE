@@ -4,28 +4,20 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import os
-from typing import Dict, Tuple, Opticlass SentimentEngine:
+from typing import Dict, Tuple, Optional
+
+class SentimentEngine:
     def __init__(self, weights_file="config/rule_weights.json"):
         self.weights_file = weights_file
         self.weights = self.load_weights()
         self._ensure_config_dir()
-        # Cache indicator key mappings for performance
-        self._build_indicator_map()config_d    def _ensure_config_dir(self):
+
+    def _ensure_config_dir(self):
         """Ensure config directory exists"""
         config_dir = os.path.dirname(self.weights_file)
         if config_dir and not os.path.exists(config_dir):
             os.makedirs(config_dir, exist_ok=True)
             print(f"✅ Created config directory: {config_dir}")
-    
-    def _build_indicator_map(self):
-        """
-        OPTIMIZATION: Build cached mapping of weight keys to indicator names
-        Avoids repeated string operations in hot path (compute_weighted_sentiment)
-        """
-        self._indicator_map = {
-            key.replace("_weight", ""): key 
-            for key in self.weights.keys()
-        }config_dir}")
 
     # ------------------------------------------
     # 1️⃣ IMPROVED: Load adaptive rule weights
@@ -300,19 +292,20 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
     # 3️⃣ FIXED: Compute Weighted Sentiment with Better Confidence
     # ------------------------------------------
     def compute_weighted_sentiment(self, df):
-        """FIXED: C            if total_weight == 0:
+        """FIXED: Compute final sentiment score with improved confidence calculation"""
+        try:
+            scores = self.compute_indicator_bias(df)
+            
+            # Calculate weighted sum
+            weighted_sum = 0
+            total_weight = sum(self.weights.values())
+            
+            if total_weight == 0:
                 print("⚠️ Zero total weight, using equal weights")
                 self.weights = {k: 0.2 for k in self.weights}
                 total_weight = 1.0
-                self._build_indicator_map()  # Rebuild cache after weight change
 
-            # OPTIMIZED: Use cached indicator map instead of repeated string operations
-            for indicator_name, weight_key in self._indicator_map.items():
-                if indicator_name in scores:
-                    score = scores[indicator_name]
-                    weighted_sum += self.weights[weight_key] * score
-                else:
-                    print(f"⚠️ Missing score for {indicator_name}"):
+            for key, weight in self.weights.items():
                 indicator_key = key.replace("_weight", "")
                 if indicator_key in scores:
                     score = scores[indicator_key]
@@ -508,16 +501,13 @@ from typing import Dict, Tuple, Opticlass SentimentEngine:
     # 5️⃣ NEW: Update Weights Manually
     # ------------------------------------------
     def update_weights(self, new_weights):
-                 self.weights = new_weights
+        """Update rule weights manually"""
+        try:
+            # Validate weights
+            if not isinstance(new_weights, dict):
+                raise ValueError("Weights must be a dictionary")
             
-            # OPTIMIZED: Rebuild indicator map cache after weight change
-            self._build_indicator_map()
-            
-            # Save to file
-            with open(self.weights_file, "w") as f:
-                json.dump(new_weights, f, indent=4)
-            
-            print("✅ Weights updated and saved:", new_weights))) - 1.0) > 0.01:
+            if abs(sum(new_weights.values()) - 1.0) > 0.01:
                 print("⚠️ Weights don't sum to 1.0, normalizing...")
                 total = sum(new_weights.values())
                 new_weights = {k: v/total for k, v in new_weights.items()}
