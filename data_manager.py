@@ -15,6 +15,7 @@ Fixed Issues:
 """
 
 import os
+import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
@@ -56,28 +57,88 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Logging
+# Root/basic logger configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
+logger.propagate = False
 
 # Connection-specific logging to file
 connection_logger = logging.getLogger("DataManager.Connection")
 connection_logger.setLevel(logging.DEBUG)
+# Prevent duplicate messages via root logger handlers
+connection_logger.propagate = False
+# Reset existing handlers to avoid duplicates on Streamlit reruns
+for _h in list(connection_logger.handlers):
+    try:
+        if hasattr(_h, "close"):
+            _h.close()
+    except Exception:
+        pass
+    connection_logger.removeHandler(_h)
 
 # Create logs directory if it doesn't exist
 LOGS_DIR = "logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# File handler for connection logs
+def _is_windows_ansi_console() -> bool:
+    """Detect Windows console likely using a non-UTF8 codepage (e.g., cp1252)."""
+    encoding = getattr(sys.stdout, "encoding", None) or ""
+    return os.name == "nt" and encoding.lower() not in ("utf-8", "utf8", "utf_8")
+
+
+class ConsoleSafeFormatter(logging.Formatter):
+    """Formatter that avoids UnicodeEncodeError on Windows ANSI consoles.
+
+    It preserves Unicode on UTF-8-capable terminals, and degrades gracefully
+    on ANSI codepages by replacing a few common symbols with ASCII fallbacks
+    and using a safe re-encode with replacement as a last resort.
+    """
+
+    _REPLACEMENTS = {
+        "✓": "OK",
+        "✅": "OK",
+        "❌": "X",
+        "⚠️": "WARN",
+        "⚠": "WARN",
+        "📊": "STATS",
+        "💡": "TIP",
+        "📋": "INFO",
+        "→": "->",
+        "—": "-",
+        "–": "-",
+        "…": "...",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        if not _is_windows_ansi_console():
+            return formatted
+
+        # Apply targeted replacements for known symbols first
+        for bad, good in self._REPLACEMENTS.items():
+            if bad in formatted:
+                formatted = formatted.replace(bad, good)
+
+        # Ensure string can be encoded by the active console
+        console_encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            formatted.encode(console_encoding)
+            return formatted
+        except Exception:
+            return formatted.encode(console_encoding, errors="replace").decode(console_encoding, errors="replace")
+
+
+# File handler for connection logs (force UTF-8 to support Unicode symbols)
 connection_log_file = os.path.join(LOGS_DIR, f"mt5_connection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-file_handler = logging.FileHandler(connection_log_file)
+file_handler = logging.FileHandler(connection_log_file, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
 connection_logger.addHandler(file_handler)
 
-# Also add console handler for connection logger
+# Also add console handler for connection logger (ASCII-safe on Windows ANSI consoles)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+console_handler.setFormatter(ConsoleSafeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 connection_logger.addHandler(console_handler)
 
 logger.info(f"Connection logging enabled: {connection_log_file}")
