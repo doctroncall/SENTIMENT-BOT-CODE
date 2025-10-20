@@ -714,25 +714,18 @@ class DataManager:
 
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        # Try MT5 first if enabled
-        if self.use_mt5:
-            if not self._connected:
-                logger.info(f"MT5 not connected, attempting to connect...")
-                connected = self.connect()
-                if not connected:
-                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
-                
-            if self._connected:
-                try:
-                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
-                    df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
-                except Exception as e:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
-                    logger.info(f"Will attempt Yahoo Finance fallback...")
-            else:
-                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
+        # Try MT5 first if enabled and connected
+        if self.use_mt5 and self._connected:
+            try:
+                logger.info(f"Fetching {symbol} {timeframe} from MT5...")
+                df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                if not df.empty:
+                    logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
+            except Exception as e:
+                logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+                logger.info(f"Will attempt Yahoo Finance fallback...")
+        elif self.use_mt5 and not self._connected:
+            logger.warning(f"MT5 not connected - skipping MT5 data fetch. Call connect() first.")
 
         # Fallback to yfinance if allowed and needed
         if (df.empty or df is None) and use_yahoo_fallback:
