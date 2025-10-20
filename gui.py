@@ -197,6 +197,99 @@ def get_mt5_status(dashboard: Dashboard) -> Dict:
         }
 
 
+def render_data_collection_status(dashboard: Dashboard) -> None:
+    """Render real-time MT5 data collection status window"""
+    st.subheader("📊 MT5 Data Collection Status")
+    
+    try:
+        # Import the tracker
+        from data_manager import get_collection_status
+        tracker = get_collection_status()
+        status = tracker.get_status()
+        
+        # Status indicator
+        if status['current_status'] == 'idle':
+            st.info("💤 **Status:** Idle - No active data collection")
+        elif status['current_status'] == 'connecting':
+            st.warning("🔌 **Status:** Connecting to MT5...")
+        elif status['current_status'] == 'fetching':
+            st.success(f"📡 **Status:** Fetching data - {status['current_symbol']} {status['current_timeframe'] or ''}")
+        elif status['current_status'] == 'processing':
+            st.success(f"⚙️ **Status:** Processing data...")
+        elif status['current_status'] == 'error':
+            st.error(f"❌ **Status:** Error - {status.get('error_message', 'Unknown error')}")
+        else:
+            st.info("💤 **Status:** Ready")
+        
+        # Progress metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            total = status.get('total_symbols', 0)
+            st.metric("Total Symbols", total)
+        
+        with col2:
+            completed = len(status.get('symbols_completed', []))
+            st.metric("✅ Completed", completed)
+        
+        with col3:
+            failed = len(status.get('symbols_failed', []))
+            st.metric("❌ Failed", failed, delta_color="inverse")
+        
+        with col4:
+            queued = len(status.get('symbols_queue', []))
+            st.metric("⏳ Queued", queued)
+        
+        # Current operation details
+        if status['current_symbol']:
+            st.markdown("---")
+            st.markdown(f"**🎯 Current Symbol:** `{status['current_symbol']}`")
+            
+            # Show timeframe data for current symbol
+            tf_data = status.get('timeframe_data', {}).get(status['current_symbol'], {})
+            if tf_data:
+                st.markdown("**Timeframe Collection:**")
+                
+                tf_cols = st.columns(len(tf_data))
+                for idx, (tf, data) in enumerate(tf_data.items()):
+                    with tf_cols[idx]:
+                        bars = data.get('bars', 0)
+                        tf_status = data.get('status', 'unknown')
+                        
+                        if tf_status == 'complete':
+                            st.success(f"{tf}\n{bars} bars ✅")
+                        elif tf_status == 'fetching':
+                            st.info(f"{tf}\nFetching... ⏳")
+                        elif tf_status == 'failed':
+                            st.error(f"{tf}\nFailed ❌")
+                        elif tf_status == 'empty':
+                            st.warning(f"{tf}\nNo data ⚠️")
+                        else:
+                            st.text(f"{tf}\n...")
+        
+        # Completed symbols summary
+        if status.get('symbols_completed'):
+            with st.expander("✅ Completed Symbols", expanded=False):
+                for sym in status['symbols_completed']:
+                    tf_data = status.get('timeframe_data', {}).get(sym, {})
+                    total_bars = sum(data.get('bars', 0) for data in tf_data.values())
+                    tf_count = len([d for d in tf_data.values() if d.get('status') == 'complete'])
+                    st.text(f"✅ {sym}: {tf_count} timeframes, {total_bars} total bars")
+        
+        # Failed symbols
+        if status.get('symbols_failed'):
+            with st.expander("❌ Failed Symbols", expanded=False):
+                for sym in status['symbols_failed']:
+                    st.text(f"❌ {sym}")
+        
+        # Last update timestamp
+        if status.get('last_update'):
+            st.caption(f"🕒 Last updated: {status['last_update'].strftime('%H:%M:%S')}")
+        
+    except Exception as e:
+        st.error(f"❌ Error rendering data collection status: {e}")
+
+
 def render_mt5_connection_card(dashboard: Dashboard) -> None:
     """Render MT5 connection status card with controls"""
     mt5_status = get_mt5_status(dashboard)
@@ -579,6 +672,12 @@ def main() -> None:
     
     st.markdown("---")
     
+    # Data Collection Status Window (NEW!)
+    with st.container():
+        render_data_collection_status(dashboard)
+    
+    st.markdown("---")
+    
     # System Metrics Dashboard
     with st.container():
         render_system_metrics(dashboard)
@@ -606,11 +705,25 @@ def main() -> None:
         
         # Quick Actions Row
         st.subheader("⚡ Quick Actions")
+        
+        # Info box explaining the difference
+        st.info("""
+        💡 **Button Guide:**
+        - **Run Full Analysis** = Analyze ALL configured symbols (see Symbol Configuration below)
+        - **Analyze Single Symbol** = Analyze ONE specific symbol you enter
+        """)
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            if st.button("▶️ Run Full Analysis", type="primary", use_container_width=True):
-                with st.spinner("Running analysis..."):
+            st.markdown("**📊 ALL Symbols**")
+            if st.button(
+                "▶️ Run Full Analysis", 
+                type="primary", 
+                use_container_width=True,
+                help=f"Analyze ALL {len(dashboard.symbols)} configured symbols: {', '.join(dashboard.symbols)}"
+            ):
+                with st.spinner(f"Running analysis for {len(dashboard.symbols)} symbols..."):
                     result, out, err = capture_output(dashboard.run_full_cycle)
                 if err:
                     st.error(f"❌ Error: {err}")
@@ -619,14 +732,26 @@ def main() -> None:
                     st.rerun()
         
         with col2:
-            manual_sym = st.text_input("Symbol", placeholder="GBPUSD", key="home_sym")
-            if st.button("🎯 Analyze Symbol", use_container_width=True):
+            st.markdown("**🎯 Single Symbol**")
+            manual_sym = st.text_input(
+                "Enter Symbol", 
+                placeholder="e.g., GBPUSD", 
+                key="home_sym",
+                help="Enter any trading symbol (e.g., GBPUSD, XAUUSD, EURUSD)"
+            )
+            if st.button(
+                "🎯 Analyze This Symbol", 
+                use_container_width=True,
+                help="Analyze only the specific symbol you entered above"
+            ):
                 if manual_sym.strip():
                     with st.spinner(f"Analyzing {manual_sym}..."):
                         result, out, err = capture_output(dashboard.run_manual_analysis, manual_sym.strip())
                     if not err:
                         st.success(f"✅ Done!")
                         st.rerun()
+                else:
+                    st.warning("⚠️ Please enter a symbol first")
         
         with col3:
             if st.button("✅ Verify All", type="secondary", use_container_width=True):

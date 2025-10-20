@@ -16,6 +16,7 @@ Fixed Issues:
 
 import os
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
@@ -58,6 +59,168 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
+
+# ----------------------------
+# DATA COLLECTION STATUS TRACKER
+# ----------------------------
+class DataCollectionStatus:
+    """
+    Tracks real-time data collection progress
+    Thread-safe singleton for monitoring data collection operations
+    """
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+        
+        import threading
+        self._initialized = True
+        self._status_lock = threading.Lock()
+        
+        # Current operation tracking
+        self.current_symbol = None
+        self.current_timeframe = None
+        self.current_status = "idle"  # idle, connecting, fetching, processing, complete, error
+        self.symbols_queue = []
+        self.symbols_completed = []
+        self.symbols_failed = []
+        
+        # Detailed tracking
+        self.timeframe_data = {}  # {symbol: {tf: {bars: int, status: str}}}
+        self.last_update = datetime.now()
+        self.error_message = None
+        
+    def reset(self):
+        """Reset tracking for new collection cycle"""
+        with self._status_lock:
+            self.current_symbol = None
+            self.current_timeframe = None
+            self.current_status = "idle"
+            self.symbols_queue = []
+            self.symbols_completed = []
+            self.symbols_failed = []
+            self.timeframe_data = {}
+            self.last_update = datetime.now()
+            self.error_message = None
+    
+    def start_collection(self, symbols: List[str]):
+        """Mark start of data collection"""
+        with self._status_lock:
+            self.reset()
+            self.symbols_queue = symbols.copy()
+            self.current_status = "connecting"
+            self.last_update = datetime.now()
+    
+    def start_symbol(self, symbol: str):
+        """Mark start of symbol processing"""
+        with self._status_lock:
+            self.current_symbol = symbol
+            self.current_timeframe = None
+            self.current_status = "fetching"
+            self.last_update = datetime.now()
+            if symbol not in self.timeframe_data:
+                self.timeframe_data[symbol] = {}
+    
+    def start_timeframe(self, symbol: str, timeframe: str):
+        """Mark start of timeframe fetch"""
+        with self._status_lock:
+            self.current_symbol = symbol
+            self.current_timeframe = timeframe
+            self.current_status = "fetching"
+            self.last_update = datetime.now()
+            if symbol not in self.timeframe_data:
+                self.timeframe_data[symbol] = {}
+            self.timeframe_data[symbol][timeframe] = {
+                'bars': 0,
+                'status': 'fetching'
+            }
+    
+    def complete_timeframe(self, symbol: str, timeframe: str, bars: int):
+        """Mark timeframe fetch complete"""
+        with self._status_lock:
+            if symbol in self.timeframe_data:
+                self.timeframe_data[symbol][timeframe] = {
+                    'bars': bars,
+                    'status': 'complete' if bars > 0 else 'empty'
+                }
+            self.last_update = datetime.now()
+    
+    def fail_timeframe(self, symbol: str, timeframe: str, error: str):
+        """Mark timeframe fetch failed"""
+        with self._status_lock:
+            if symbol in self.timeframe_data:
+                self.timeframe_data[symbol][timeframe] = {
+                    'bars': 0,
+                    'status': 'failed',
+                    'error': error
+                }
+            self.last_update = datetime.now()
+    
+    def complete_symbol(self, symbol: str, success: bool = True):
+        """Mark symbol processing complete"""
+        with self._status_lock:
+            if success:
+                if symbol not in self.symbols_completed:
+                    self.symbols_completed.append(symbol)
+            else:
+                if symbol not in self.symbols_failed:
+                    self.symbols_failed.append(symbol)
+            
+            if symbol in self.symbols_queue:
+                self.symbols_queue.remove(symbol)
+            
+            self.current_symbol = None
+            self.current_timeframe = None
+            self.current_status = "idle" if not self.symbols_queue else "processing"
+            self.last_update = datetime.now()
+    
+    def set_error(self, error: str):
+        """Set error message"""
+        with self._status_lock:
+            self.error_message = error
+            self.current_status = "error"
+            self.last_update = datetime.now()
+    
+    def get_status(self) -> Dict:
+        """Get current status snapshot"""
+        with self._status_lock:
+            return {
+                'current_symbol': self.current_symbol,
+                'current_timeframe': self.current_timeframe,
+                'current_status': self.current_status,
+                'symbols_queue': self.symbols_queue.copy(),
+                'symbols_completed': self.symbols_completed.copy(),
+                'symbols_failed': self.symbols_failed.copy(),
+                'timeframe_data': {k: v.copy() for k, v in self.timeframe_data.items()},
+                'last_update': self.last_update,
+                'error_message': self.error_message,
+                'total_symbols': len(self.symbols_completed) + len(self.symbols_failed) + len(self.symbols_queue),
+                'progress': len(self.symbols_completed) + len(self.symbols_failed)
+            }
+    
+    def is_active(self) -> bool:
+        """Check if collection is currently active"""
+        with self._status_lock:
+            return self.current_status in ["connecting", "fetching", "processing"]
+
+
+# Global collection status tracker
+import threading
+_collection_status = DataCollectionStatus()
+
+def get_collection_status() -> DataCollectionStatus:
+    """Get global collection status tracker"""
+    return _collection_status
 
 # Symbol mapping for different data sources
 SYMBOL_MAPPING = {
@@ -714,9 +877,16 @@ class DataManager:
         end_utc = datetime.now(timezone.utc)
         results = {}
         
+        # Track symbol collection start
+        tracker = get_collection_status()
+        tracker.start_symbol(symbol)
+        
         # PRODUCTION: Minimal logging for clean console output
         for tf in timeframes:
             try:
+                # Track timeframe fetch start
+                tracker.start_timeframe(symbol, tf)
+                
                 df = self.fetch_ohlcv_for_timeframe(
                     symbol, tf, 
                     lookback_days=lookback_days, 
@@ -726,10 +896,18 @@ class DataManager:
                 
                 if not df.empty:
                     results[tf] = df
+                    tracker.complete_timeframe(symbol, tf, len(df))
+                else:
+                    tracker.complete_timeframe(symbol, tf, 0)
                     
             except Exception as e:
                 logger.error(f"Error fetching {symbol} {tf}: {e}")
-            
+                tracker.fail_timeframe(symbol, tf, str(e))
+        
+        # Mark symbol complete
+        has_data = len(results) > 0
+        tracker.complete_symbol(symbol, success=has_data)
+        
         return results
 
     def get_available_symbols(self) -> List[str]:
