@@ -59,6 +59,20 @@ os.makedirs(DATA_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
 
+# Status monitoring
+try:
+    from status_monitor import log_connection, log_data_fetch, log_success, log_error, log_warning, log_cache
+    STATUS_MONITOR_AVAILABLE = True
+except ImportError:
+    # Fallback stubs if status_monitor not available
+    STATUS_MONITOR_AVAILABLE = False
+    def log_connection(msg, details=None): pass
+    def log_data_fetch(msg, details=None): pass
+    def log_success(msg, details=None): pass
+    def log_error(msg, details=None): pass
+    def log_warning(msg, details=None): pass
+    def log_cache(msg, details=None): pass
+
 # Symbol mapping for different data sources
 SYMBOL_MAPPING = {
     # MT5 to Yahoo Finance mapping
@@ -238,11 +252,15 @@ class DataManager:
         """
         if not self.use_mt5:
             logger.info("MT5 usage disabled or MetaTrader5 module missing.")
+            log_warning("MT5 usage disabled or module missing")
             return False
 
         # If already connected, return True
         if self._connected:
+            log_connection("Already connected to MT5")
             return True
+
+        log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
         # If terminal path is provided, attempt to initialize using it.
         try:
@@ -253,11 +271,13 @@ class DataManager:
                 
             if not initialized:
                 logger.error(f"MT5 initialize failed: {mt5.last_error()}")
+                log_error("MT5 initialization failed", str(mt5.last_error()))
                 self._connected = False
                 return False
                 
         except Exception as e:
             logger.exception(f"Failed to initialize MT5 terminal: {e}")
+            log_error("MT5 terminal initialization exception", str(e))
             self._connected = False
             return False
 
@@ -270,16 +290,19 @@ class DataManager:
             )
             if not authorized:
                 logger.error(f"MT5 login failed: {mt5.last_error()}")
+                log_error("MT5 login failed", str(mt5.last_error()))
                 self._connected = False
                 return False
                 
         except Exception as e:
             logger.exception(f"MT5 login exception: {e}")
+            log_error("MT5 login exception", str(e))
             self._connected = False
             return False
 
         self._connected = True
         logger.info(f"Connected to MT5 (login={self.mt5_login} server={self.mt5_server})")
+        log_success(f"Connected to MT5", f"Server: {self.mt5_server}, Login: {self.mt5_login}")
         return True
 
     def disconnect(self):
@@ -287,8 +310,10 @@ class DataManager:
         if self.use_mt5 and self._connected:
             try:
                 mt5.shutdown()
+                log_connection("Disconnected from MT5")
             except Exception as e:
                 logger.warning(f"Error during MT5 shutdown: {e}")
+                log_warning("Error during MT5 shutdown", str(e))
         self._connected = False
         logger.info("MT5 disconnected")
 
@@ -378,18 +403,23 @@ class DataManager:
         FIXED: Fetch OHLCV using MT5 copy_rates_range with improved timezone handling
         """
         if not self.use_mt5 or not self._connected:
+            log_error("MT5 fetch failed - not connected")
             raise RuntimeError("MT5 usage disabled or not connected")
 
         tf_const = MT5_TF_MAP.get(timeframe.upper())
         if tf_const is None:
+            log_error(f"Unsupported timeframe: {timeframe}")
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
         # FIXED: Normalize symbol consistently
         standard_symbol = normalize_symbol(symbol)
         
+        log_data_fetch(f"Fetching {standard_symbol} {timeframe} from MT5")
+        
         # FIXED: Auto-discover broker-specific symbol name
         broker_symbol = self.find_broker_symbol(standard_symbol)
         if broker_symbol is None:
+            log_error(f"Symbol {standard_symbol} not found in MT5")
             raise ValueError(f"Symbol {standard_symbol} not found in MT5 broker symbols")
         
         # Use the broker-specific symbol name
@@ -412,14 +442,17 @@ class DataManager:
                 if rates is None or len(rates) == 0:
                     if attempt < self.max_retries - 1:
                         logger.warning(f"No rates returned for {symbol} {timeframe} (attempt {attempt + 1})")
+                        log_warning(f"Retry {attempt + 1}/{self.max_retries} for {symbol} {timeframe}")
                         time.sleep(1)
                         continue
                     else:
                         logger.warning(f"No rates returned for {symbol} {timeframe} after {self.max_retries} attempts")
+                        log_error(f"No data returned for {symbol} {timeframe} after {self.max_retries} attempts")
                         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
                 
                 df = _mt5_df_from_rates(rates)
                 logger.info(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
+                log_success(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
                 return df
                 
             except Exception as e:
@@ -437,6 +470,7 @@ class DataManager:
         FIXED: Fallback to yfinance with improved error handling
         """
         if not YFINANCE_AVAILABLE:
+            log_error("yfinance not available for fallback")
             raise RuntimeError("yfinance not available for fallback")
 
         # Map timeframes to yfinance intervals
@@ -448,6 +482,8 @@ class DataManager:
         yf_tf = tf_map.get(timeframe.upper(), "1d")
         yf_symbol = _get_yahoo_symbol(symbol)
 
+        log_data_fetch(f"Fetching {symbol} {timeframe} from Yahoo Finance (fallback)")
+
         try:
             # yfinance expects timezone-naive dates
             start_naive = start_utc.replace(tzinfo=None) if start_utc.tzinfo else start_utc
@@ -458,6 +494,7 @@ class DataManager:
             
             if df.empty:
                 logger.warning(f"No data from yfinance for {yf_symbol} {timeframe}")
+                log_warning(f"No data from Yahoo Finance for {symbol} {timeframe}")
                 return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
 
             # Standardize column names and format
@@ -494,6 +531,7 @@ class DataManager:
                 }).dropna()
             
             logger.info(f"Fetched {len(df)} bars for {yf_symbol} {timeframe} from yfinance")
+            log_success(f"Fetched {len(df)} bars for {symbol} {timeframe} from Yahoo Finance")
             return df
             
         except Exception as e:

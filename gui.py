@@ -22,6 +22,7 @@ except Exception:
 
 # Local imports
 from dashboard import Dashboard
+from status_monitor import get_monitor, EventType
 
 
 def ensure_dashboard() -> Dashboard:
@@ -29,6 +30,129 @@ def ensure_dashboard() -> Dashboard:
     if "dashboard" not in st.session_state:
         st.session_state.dashboard = Dashboard()
     return st.session_state.dashboard
+
+
+def render_status_monitor() -> None:
+    """Render real-time status monitor with event log and statistics"""
+    st.header("📊 Real-Time Application Status")
+    
+    monitor = get_monitor()
+    
+    # Add controls
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    with col1:
+        st.markdown("**Live monitoring of all application activities**")
+    with col2:
+        auto_refresh = st.checkbox("🔄 Auto-refresh", value=True, key="status_auto_refresh")
+    with col3:
+        if st.button("🔄 Refresh Now", width='stretch'):
+            st.rerun()
+    with col4:
+        if st.button("🧹 Clear Log", width='stretch'):
+            monitor.clear()
+            st.success("Status log cleared!")
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Statistics Dashboard
+    st.subheader("📈 Activity Statistics")
+    stats = monitor.get_stats()
+    
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    with col1:
+        st.metric("Total Events", stats['total_events'])
+    with col2:
+        st.metric("Successes", stats['successes'], delta_color="normal")
+    with col3:
+        st.metric("Failures", stats['failures'], delta_color="inverse")
+    with col4:
+        st.metric("Warnings", stats['warnings'], delta_color="off")
+    with col5:
+        st.metric("Data Fetches", stats['data_fetches'])
+    with col6:
+        st.metric("Analyses", stats['analyses'])
+    
+    st.markdown("---")
+    
+    # Event filtering
+    st.subheader("🔍 Event Log")
+    
+    col_filter, col_count = st.columns([3, 1])
+    
+    with col_filter:
+        filter_option = st.selectbox(
+            "Filter by type",
+            ["All Events", "Success", "Error", "Warning", "Data Fetch", "Analysis", "Connection", "Info", "Cache"],
+            index=0
+        )
+    
+    with col_count:
+        event_count = st.number_input("Show last N events", min_value=10, max_value=500, value=100, step=10)
+    
+    # Get filtered events
+    filter_map = {
+        "All Events": None,
+        "Success": EventType.SUCCESS,
+        "Error": EventType.ERROR,
+        "Warning": EventType.WARNING,
+        "Data Fetch": EventType.DATA_FETCH,
+        "Analysis": EventType.ANALYSIS,
+        "Connection": EventType.CONNECTION,
+        "Info": EventType.INFO,
+        "Cache": EventType.CACHE
+    }
+    
+    event_type_filter = filter_map.get(filter_option)
+    events = monitor.get_filtered_events(event_type_filter, count=event_count)
+    
+    # Display events in a formatted table
+    if events:
+        st.markdown(f"**Showing {len(events)} most recent events** (newest first)")
+        
+        # Create DataFrame for better display
+        import pandas as pd
+        df_events = pd.DataFrame(events)
+        
+        # Style the dataframe
+        st.dataframe(
+            df_events,
+            column_config={
+                "timestamp": st.column_config.TextColumn("Time", width="small"),
+                "type": st.column_config.TextColumn("Type", width="small"),
+                "message": st.column_config.TextColumn("Message", width="large"),
+                "details": st.column_config.TextColumn("Details", width="medium")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=500
+        )
+        
+        # Detailed event view
+        with st.expander("📋 Detailed Event Log (Text Format)", expanded=False):
+            event_text = "\n".join([
+                f"[{e['timestamp']}] {e['type']} {e['message']}" + 
+                (f" - {e['details']}" if e['details'] else "")
+                for e in events
+            ])
+            st.text_area("", value=event_text, height=400, label_visibility="collapsed")
+    else:
+        st.info("📝 No events logged yet. Events will appear here as the application runs.")
+    
+    # Auto-refresh section
+    st.markdown("---")
+    
+    if auto_refresh:
+        st.caption(f"🕒 Last updated: {datetime.now().strftime('%H:%M:%S')} | Auto-refreshing every second...")
+        
+        # Use a placeholder and auto-refresh with JavaScript
+        # This is a more efficient approach than using time.sleep + st.rerun
+        import time
+        time.sleep(1)
+        st.rerun()
+    else:
+        st.caption(f"🕒 Last updated: {datetime.now().strftime('%H:%M:%S')} | Auto-refresh disabled. Click 'Refresh Now' to update manually.")
 
 
 def parse_symbols(input_text: str) -> List[str]:
@@ -398,6 +522,10 @@ def main() -> None:
         
         if st.button("🧹 Clear Cache", width='stretch'):
             st.cache_data.clear()
+            # Also clear status monitor
+            from status_monitor import get_monitor, log_cache
+            get_monitor().clear()
+            log_cache("Cache and status log cleared")
             st.success("✅ Cache cleared")
         
         st.markdown("---")
@@ -423,9 +551,10 @@ def main() -> None:
     # ============================================================
     # TABBED INTERFACE
     # ============================================================
-    tab_home, tab_analyze, tab_verify, tab_reports, tab_health = st.tabs([
+    tab_home, tab_status, tab_analyze, tab_verify, tab_reports, tab_health = st.tabs([
         "🏠 Home",
-        "📊 Analysis",
+        "📊 Status Monitor",
+        "📈 Analysis",
         "✅ Verification",
         "📄 Reports",
         "🏥 Health"
@@ -441,17 +570,22 @@ def main() -> None:
             st.subheader("📖 Quick Start Guide")
             st.markdown("""
             1. **Check MT5 Connection** - Ensure MT5 is connected (see status above)
-            2. **Configure Symbols** - Set your trading symbols in the sidebar
-            3. **Run Analysis** - Go to the Analysis tab to analyze markets
-            4. **View Reports** - Check generated reports in the Reports tab
-            5. **Verify Predictions** - Use the Verification tab to check accuracy
+            2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
+            3. **Configure Symbols** - Set your trading symbols in the sidebar
+            4. **Run Analysis** - Go to the Analysis tab to analyze markets
+            5. **View Reports** - Check generated reports in the Reports tab
+            6. **Verify Predictions** - Use the Verification tab to check accuracy
             """)
             
-            st.info("💡 **Pro Tip:** Enable auto-refresh in settings for real-time updates")
+            st.info("💡 **Pro Tip:** The Status Monitor tab updates every second to show live activity!")
         
         with col2:
             st.subheader("📈 Current Status")
             render_latest_log_table(getattr(dashboard, "excel_file", "sentiment_log.xlsx"))
+    
+    # -------------------- STATUS MONITOR TAB --------------------
+    with tab_status:
+        render_status_monitor()
     
     # -------------------- ANALYSIS TAB --------------------
     with tab_analyze:
