@@ -199,7 +199,16 @@ def get_mt5_status(dashboard: Dashboard) -> Dict:
 
 def render_mt5_connection_card(dashboard: Dashboard) -> None:
     """Render MT5 connection status card with controls"""
+    import platform
     mt5_status = get_mt5_status(dashboard)
+    
+    # Check if running on non-Windows platform
+    is_windows = platform.system() == 'Windows'
+    
+    # Platform compatibility warning
+    if not is_windows:
+        st.warning("⚠️ **Platform Notice:** MetaTrader5 only works on Windows. You're running on " + platform.system() + ". MT5 features are disabled. Use Yahoo Finance as data source instead.")
+        return
     
     # Connection Status Header
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -218,12 +227,16 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
         if mt5_status['enabled'] and not mt5_status['connected']:
             if st.button("🔌 Connect MT5", width='stretch', type="primary"):
                 with st.spinner("Connecting to MT5..."):
-                    success = dashboard.data_manager.connect()
+                    try:
+                        success = dashboard.data_manager.connect()
+                    except Exception as e:
+                        st.error(f"❌ Connection error: {str(e)}")
+                        success = False
                 if success:
                     st.success("✅ Connected!")
                     st.rerun()
                 else:
-                    st.error("❌ Connection failed")
+                    st.error("❌ Connection failed - Check logs for details")
     
     with col3:
         if mt5_status['connected']:
@@ -568,14 +581,32 @@ def main() -> None:
         
         with col1:
             st.subheader("📖 Quick Start Guide")
-            st.markdown("""
-            1. **Check MT5 Connection** - Ensure MT5 is connected (see status above)
-            2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
-            3. **Configure Symbols** - Set your trading symbols in the sidebar
-            4. **Run Analysis** - Go to the Analysis tab to analyze markets
-            5. **View Reports** - Check generated reports in the Reports tab
-            6. **Verify Predictions** - Use the Verification tab to check accuracy
-            """)
+            
+            # Check platform and provide appropriate instructions
+            import platform
+            is_windows = platform.system() == 'Windows'
+            
+            if not is_windows:
+                st.markdown("""
+                **Running on non-Windows platform - MT5 not available**
+                
+                1. **Data Source** - System will automatically use Yahoo Finance
+                2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
+                3. **Configure Symbols** - Set your trading symbols in the sidebar
+                4. **Run Analysis** - Go to the Analysis tab to analyze markets
+                5. **View Reports** - Check generated reports in the Reports tab
+                6. **Verify Predictions** - Use the Verification tab to check accuracy
+                """)
+                st.warning("⚠️ MT5 is only available on Windows. Yahoo Finance will be used as data source.")
+            else:
+                st.markdown("""
+                1. **Check MT5 Connection** - Ensure MT5 is connected (see status above)
+                2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
+                3. **Configure Symbols** - Set your trading symbols in the sidebar
+                4. **Run Analysis** - Go to the Analysis tab to analyze markets
+                5. **View Reports** - Check generated reports in the Reports tab
+                6. **Verify Predictions** - Use the Verification tab to check accuracy
+                """)
             
             st.info("💡 **Pro Tip:** The Status Monitor tab updates every second to show live activity!")
         
