@@ -261,6 +261,70 @@ class DataManager:
     # ----------------------------
     # FIXED: Core fetch routines
     # ----------------------------
+    def _find_broker_symbol(self, standard_symbol: str) -> Optional[str]:
+        """
+        Find the correct broker-specific symbol variation
+        Tries common variations until one is found
+        """
+        # FIXED: Normalize symbol
+        standard_symbol = normalize_symbol(standard_symbol)
+        
+        # Check cache first
+        if hasattr(self, '_symbol_cache') and standard_symbol in self._symbol_cache:
+            cached = self._symbol_cache[standard_symbol]
+            logger.debug(f"Using cached symbol: {standard_symbol} -> {cached}")
+            return cached
+        
+        # Initialize cache if needed
+        if not hasattr(self, '_symbol_cache'):
+            self._symbol_cache = {}
+        
+        # Common broker symbol variations
+        variations = [
+            standard_symbol,           # Standard: GBPUSD
+            f"{standard_symbol}m",     # Micro lots: GBPUSDm
+            f"{standard_symbol}.a",    # Alternative: GBPUSD.a
+            f"{standard_symbol}.",     # Dot suffix: GBPUSD.
+            f"{standard_symbol}.raw",  # Raw: GBPUSD.raw
+            f"{standard_symbol}#",     # Hash: GBPUSD#
+            f"{standard_symbol}pro",   # Pro: GBPUSDpro
+        ]
+        
+        logger.info(f"Searching for broker symbol: {standard_symbol}")
+        
+        # Try each variation
+        for variant in variations:
+            try:
+                symbol_info = mt5.symbol_info(variant)
+                if symbol_info is not None:
+                    logger.info(f"✅ Found broker symbol: {standard_symbol} -> {variant}")
+                    self._symbol_cache[standard_symbol] = variant
+                    return variant
+            except Exception as e:
+                logger.debug(f"Variant {variant} check failed: {e}")
+                continue
+        
+        # If no exact match found, try fuzzy search
+        logger.warning(f"No exact match for {standard_symbol}, trying fuzzy search...")
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols:
+                # Look for symbols containing the standard name
+                matches = [s.name for s in all_symbols if standard_symbol in s.name.upper()]
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"💡 Fuzzy match found: {standard_symbol} -> {best_match}")
+                    if len(matches) > 1:
+                        logger.info(f"   Other possible matches: {', '.join(matches[1:6])}")
+                    self._symbol_cache[standard_symbol] = best_match
+                    return best_match
+        except Exception as e:
+            logger.error(f"Error during fuzzy symbol search: {e}")
+        
+        logger.error(f"❌ Could not find broker symbol for {standard_symbol}")
+        logger.error(f"   Tried variations: {', '.join(variations)}")
+        return None
+
     def _fetch_mt5_ohlcv(self, symbol: str, timeframe: str, start_utc: datetime, end_utc: datetime) -> pd.DataFrame:
         """
         FIXED: Fetch OHLCV using MT5 copy_rates_range with improved timezone handling
@@ -275,9 +339,9 @@ class DataManager:
         # FIXED: Normalize symbol consistently
         symbol = normalize_symbol(symbol)
         
-        # Check if symbol exists in MT5
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
+        # FIXED: Find broker-specific symbol variation
+        broker_symbol = self._find_broker_symbol(symbol)
+        if broker_symbol is None:
             raise ValueError(f"Symbol {symbol} not found in MT5")
 
         # FIXED: Safe timestamp conversion
@@ -287,27 +351,27 @@ class DataManager:
         # Retry logic
         for attempt in range(self.max_retries):
             try:
-                rates = mt5.copy_rates_range(symbol, tf_const, utc_from, utc_to)
+                rates = mt5.copy_rates_range(broker_symbol, tf_const, utc_from, utc_to)
                 
                 if rates is None or len(rates) == 0:
                     if attempt < self.max_retries - 1:
-                        logger.warning(f"No rates returned for {symbol} {timeframe} (attempt {attempt + 1})")
+                        logger.warning(f"No rates returned for {broker_symbol} {timeframe} (attempt {attempt + 1})")
                         time.sleep(1)
                         continue
                     else:
-                        logger.warning(f"No rates returned for {symbol} {timeframe} after {self.max_retries} attempts")
+                        logger.warning(f"No rates returned for {broker_symbol} {timeframe} after {self.max_retries} attempts")
                         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
                 
                 df = _mt5_df_from_rates(rates)
-                logger.info(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
+                logger.info(f"✅ Fetched {len(df)} bars for {symbol} ({broker_symbol}) {timeframe} from MT5")
                 return df
                 
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe} (attempt {attempt + 1}): {e}")
+                    logger.warning(f"MT5 fetch failed for {broker_symbol} {timeframe} (attempt {attempt + 1}): {e}")
                     time.sleep(2)
                 else:
-                    logger.error(f"MT5 fetch failed for {symbol} {timeframe} after {self.max_retries} attempts: {e}")
+                    logger.error(f"MT5 fetch failed for {broker_symbol} {timeframe} after {self.max_retries} attempts: {e}")
                     raise
 
         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
