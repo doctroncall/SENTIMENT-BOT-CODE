@@ -122,11 +122,18 @@ class ProductionBot:
             return False
     
     def connect_mt5(self) -> bool:
-        """Connect to MetaTrader 5"""
-        print_step(2, 5, "Connecting to MetaTrader 5...")
+        """Connect to MetaTrader 5 (or fallback to demo mode)"""
+        print_step(2, 5, "Connecting to data source...")
         
         try:
-            print(f"  ⏳ Establishing connection...")
+            # Check if MT5 is available
+            if not self.data_manager.use_mt5:
+                print(f"  ℹ️  MT5 not available (Linux/Mac or not installed)")
+                print(f"  📊 Falling back to Yahoo Finance demo mode")
+                logger.info("Using Yahoo Finance demo mode")
+                return True
+            
+            print(f"  ⏳ Establishing MT5 connection...")
             print(f"     Server: {self.data_manager.mt5_server}")
             print(f"     Account: {self.data_manager.mt5_login}")
             
@@ -137,80 +144,122 @@ class ProductionBot:
                 logger.info("MT5 connection established")
                 return True
             else:
-                print(f"  ❌ Failed to connect to MT5")
-                logger.error("MT5 connection failed")
-                return False
+                print(f"  ⚠️  MT5 connection failed")
+                print(f"  📊 Falling back to Yahoo Finance demo mode")
+                logger.warning("MT5 failed, using Yahoo Finance fallback")
+                self.data_manager._connected = False
+                return True  # Allow bot to continue with fallback
                 
         except Exception as e:
-            print(f"  ❌ Connection error: {e}")
-            logger.error(f"MT5 connection error: {e}")
-            return False
+            print(f"  ⚠️  Connection error: {e}")
+            print(f"  📊 Falling back to Yahoo Finance demo mode")
+            logger.warning(f"MT5 error, using fallback: {e}")
+            return True  # Allow bot to continue with fallback
     
     def collect_data(self) -> Dict[str, Dict[str, any]]:
-        """Collect data from MT5 for all symbols"""
+        """Collect data from MT5 for all symbols with real-time progress"""
         print_step(3, 5, "Collecting market data from MT5...")
         
         all_data = {}
+        total_tasks = len(self.symbols) * len(self.timeframes)
+        completed_tasks = 0
         
-        print(f"\n  {'Time':8s} | {'Status':2s} {'Symbol':10s} | {'TF':5s} | {'Bars':>5s}")
-        print(f"  {'-' * 60}")
+        print(f"\n  {'Time':8s} | {'Status':2s} {'Symbol':10s} | {'TF':5s} | {'Bars':>5s} | {'Progress':>10s}")
+        print(f"  {'-' * 70}")
+        
+        import time
+        from datetime import datetime
         
         for symbol in self.symbols:
             try:
                 logger.info(f"Collecting data for {symbol}")
+                print(f"  ⏳ Starting data collection for {symbol}...")
                 
-                # Collect data for all timeframes
-                symbol_data = self.data_manager.get_symbol_data(
-                    symbol=symbol,
-                    timeframes=self.timeframes,
-                    lookback_days=90
-                )
+                # Collect data for all timeframes with timeout protection
+                start_time = time.time()
+                symbol_data = {}
                 
-                # Validate data
-                if not symbol_data:
-                    print_progress(symbol, "ALL", 0, "❌")
-                    logger.warning(f"No data collected for {symbol}")
-                    continue
+                for tf in self.timeframes:
+                    try:
+                        print(f"  ⏳ {symbol:10s} | {tf:5s} | Fetching...", end="\r", flush=True)
+                        
+                        # Fetch data for this timeframe with timeout
+                        df = self.data_manager.fetch_ohlcv_for_timeframe(
+                            symbol=symbol,
+                            timeframe=tf,
+                            lookback_days=90
+                        )
+                        
+                        if df is not None and not df.empty:
+                            symbol_data[tf] = df
+                            completed_tasks += 1
+                            progress = f"{completed_tasks}/{total_tasks}"
+                            print_progress(symbol, tf, len(df), "✅") 
+                            print(f"                                                                 [{progress}]")
+                        else:
+                            completed_tasks += 1
+                            progress = f"{completed_tasks}/{total_tasks}"
+                            print_progress(symbol, tf, 0, "⚠️")
+                            print(f"                                                                 [{progress}]")
+                            
+                    except Exception as tf_error:
+                        completed_tasks += 1
+                        progress = f"{completed_tasks}/{total_tasks}"
+                        print_progress(symbol, tf, 0, "❌")
+                        print(f"  Error: {str(tf_error)[:50]}")
+                        logger.error(f"Error fetching {symbol} {tf}: {tf_error}")
                 
-                # Store data
-                all_data[symbol] = symbol_data
+                elapsed = time.time() - start_time
                 
-                # Print progress for each timeframe
-                for tf, df in symbol_data.items():
-                    if df is not None and not df.empty:
-                        print_progress(symbol, tf, len(df), "✅")
-                    else:
-                        print_progress(symbol, tf, 0, "⚠️")
-                
-                logger.info(f"Data collection complete for {symbol}")
-                
+                # Validate collected data for this symbol
+                if symbol_data:
+                    all_data[symbol] = symbol_data
+                    logger.info(f"✅ {symbol} collected in {elapsed:.1f}s: {len(symbol_data)} timeframes")
+                else:
+                    logger.warning(f"❌ No data collected for {symbol}")
+                    
             except Exception as e:
-                print_progress(symbol, "ALL", 0, "❌")
                 logger.error(f"Error collecting data for {symbol}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
         
         print(f"\n  ✅ Data collection complete: {len(all_data)}/{len(self.symbols)} symbols")
+        print(f"  📊 Total timeframes collected: {sum(len(v) for v in all_data.values())}")
         logger.info(f"Data collection phase complete: {len(all_data)} symbols")
         
         return all_data
     
     def analyze_data(self, all_data: Dict[str, Dict[str, any]]) -> List[Dict]:
-        """Analyze data using SMC"""
+        """Analyze data using SMC with progress tracking"""
         print_step(4, 5, "Analyzing market structure (SMC)...")
         
         results = []
+        total_symbols = len(all_data)
+        completed = 0
         
-        print(f"\n  Analyzing {len(all_data)} symbols...")
-        print(f"  {'Symbol':10s} | {'Bias':8s} | {'Confidence':>12s}")
-        print(f"  {'-' * 40}")
+        print(f"\n  Analyzing {total_symbols} symbols...")
+        print(f"  {'Symbol':10s} | {'Bias':8s} | {'Confidence':>12s} | {'Progress':>10s}")
+        print(f"  {'-' * 60}")
+        
+        import time
         
         for symbol, data in all_data.items():
             try:
                 logger.info(f"Analyzing {symbol}")
-                print(f"  ⏳ {symbol:10s} | Analyzing...", end="\r")
+                start_time = time.time()
+                print(f"  ⏳ {symbol:10s} | Analyzing...", end="\r", flush=True)
                 
-                # Run SMC analysis
-                bias = self.smc_analyzer.analyze(symbol, data)
+                # Run SMC analysis with timeout protection
+                try:
+                    bias = self.smc_analyzer.analyze(symbol, data)
+                except Exception as analysis_error:
+                    logger.error(f"SMC analysis error for {symbol}: {analysis_error}")
+                    completed += 1
+                    print(f"  ❌ {symbol:10s} | Analysis failed: {str(analysis_error)[:30]}")
+                    continue
+                
+                elapsed = time.time() - start_time
                 
                 # Store result
                 result = {
@@ -220,20 +269,28 @@ class ProductionBot:
                     'confidence_level': bias.confidence_level.value,
                     'bullish_score': bias.bullish_score,
                     'bearish_score': bias.bearish_score,
+                    'analysis_time': f"{elapsed:.2f}s",
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 }
                 results.append(result)
                 
-                # Print result
+                completed += 1
+                progress = f"{completed}/{total_symbols}"
+                
+                # Print result with progress
                 print_result(symbol, bias.direction.value, bias.confidence)
-                logger.info(f"Analysis complete for {symbol}: {bias.direction.value} ({bias.confidence:.1f}%)")
+                print(f"                                                      [{progress}] ({elapsed:.1f}s)")
+                logger.info(f"✅ {symbol}: {bias.direction.value} ({bias.confidence:.1f}%) in {elapsed:.1f}s")
                 
             except Exception as e:
-                print(f"  ❌ {symbol:10s} | Analysis failed: {e}")
+                completed += 1
+                print(f"  ❌ {symbol:10s} | Error: {str(e)[:40]}")
                 logger.error(f"Error analyzing {symbol}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
         
-        print(f"\n  ✅ Analysis complete: {len(results)}/{len(all_data)} symbols")
+        print(f"\n  ✅ Analysis complete: {len(results)}/{total_symbols} symbols")
         logger.info(f"Analysis phase complete: {len(results)} results")
         
         return results

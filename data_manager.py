@@ -420,7 +420,7 @@ class DataManager:
             
             # Resample if needed (e.g., H1 to H4)
             if timeframe.upper() == "H4":
-                df = df.resample("4H").agg({
+                df = df.resample("4h").agg({
                     "open": "first",
                     "high": "max", 
                     "low": "min",
@@ -541,72 +541,80 @@ class DataManager:
         timeframe: str,
         lookback_days: int = 30,
         end_utc: Optional[datetime] = None,
-        use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
+        use_yahoo_fallback: bool = True,  # PRODUCTION: Enable fallback by default
+        timeout_seconds: int = 30  # PRODUCTION: Add timeout protection
     ) -> pd.DataFrame:
         """
-        PRODUCTION: Fetch OHLCV for a single timeframe with minimal logging.
-        
-        Flow:
-        1. Try cache
-        2. Try MT5
-        3. Retry once if failed
-        4. Validate and return
+        PRODUCTION: Fetch OHLCV with MT5/Yahoo fallback and timeout protection.
         """
-        # Ensure end_utc is timezone-aware
+        import signal
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def timeout_handler(seconds):
+            """Context manager for timeout protection"""
+            def timeout_signal(signum, frame):
+                raise TimeoutError(f"Operation timed out after {seconds}s")
+            
+            if hasattr(signal, 'SIGALRM'):
+                old = signal.signal(signal.SIGALRM, timeout_signal)
+                signal.alarm(seconds)
+                try:
+                    yield
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old)
+            else:
+                yield
+        
+        # Setup
         if end_utc is None:
             end_utc = datetime.now(timezone.utc)
         elif end_utc.tzinfo is None:
             end_utc = end_utc.replace(tzinfo=timezone.utc)
         
         start_utc = end_utc - timedelta(days=lookback_days)
-        
-        # Normalize symbol
         symbol = normalize_symbol(symbol)
-
-        # Try cache first (silent)
         cache_path = os.path.join(DATA_DIR, f"{symbol}_{timeframe}.csv")
+        
+        # Try cache first
         cached_df = self._load_from_cache(cache_path, start_utc, end_utc)
         if cached_df is not None and not cached_df.empty:
+            logger.info(f"✅ {symbol} {timeframe}: Loaded {len(cached_df)} bars from cache")
             return cached_df
-
-        # Initialize empty DataFrame
+        
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        if not self.use_mt5:
-            logger.error(f"MT5 disabled")
-            return df
-        
-        # Ensure connection
-        if not self._connected:
-            connected = self.connect()
-            if not connected:
-                logger.error(f"MT5 connection failed")
-                return df
-        
-        # ATTEMPT 1: Fetch from MT5
-        try:
-            df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-        except Exception as e:
-            logger.debug(f"Fetch attempt 1 failed: {e}")
-        
-        # RETRY ONCE if first attempt failed
-        if df.empty:
-            time.sleep(1)  # Brief pause
+        # TRY MT5 IF AVAILABLE
+        if self.use_mt5 and self._connected:
             try:
-                df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                with timeout_handler(timeout_seconds):
+                    logger.info(f"⏳ Fetching {symbol} {timeframe} from MT5...")
+                    df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                    if not df.empty:
+                        logger.info(f"✅ {symbol} {timeframe}: MT5 {len(df)} bars")
             except Exception as e:
-                logger.debug(f"Fetch attempt 2 failed: {e}")
+                logger.debug(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+        
+        # FALLBACK TO YAHOO FINANCE
+        if df.empty and use_yahoo_fallback and YFINANCE_AVAILABLE:
+            logger.info(f"📊 Yahoo Finance for {symbol} {timeframe}...")
+            try:
+                df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
+                if not df.empty:
+                    logger.info(f"✅ {symbol} {timeframe}: Yahoo {len(df)} bars")
+            except Exception as e:
+                logger.warning(f"Yahoo failed for {symbol} {timeframe}: {e}")
         
         # VALIDATE & SAVE
         if not df.empty:
             df = self._clean_dataframe(df)
-            
             if self._validate_data_robustness(df, symbol, timeframe):
                 self._save_to_cache(df, cache_path)
             else:
-                logger.warning(f"Data quality check failed for {symbol} {timeframe}")
+                logger.warning(f"⚠️ Quality check failed for {symbol} {timeframe}")
                 df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-
+        
         return df
 
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -694,7 +702,7 @@ class DataManager:
         symbol: str,
         timeframes: Optional[List[str]] = None,
         lookback_days: int = 60,
-        use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
+        use_yahoo_fallback: bool = True,  # PRODUCTION: Enable fallback by default
     ) -> Dict[str, pd.DataFrame]:
         """
         PRODUCTION: Main convenience method - fetch data from MT5 with console feedback.
@@ -714,15 +722,25 @@ class DataManager:
         end_utc = datetime.now(timezone.utc)
         results = {}
         
-        # PRODUCTION: Minimal logging for clean console output
+        # PRODUCTION: Try MT5 first, fallback to Yahoo if needed
         for tf in timeframes:
             try:
                 df = self.fetch_ohlcv_for_timeframe(
                     symbol, tf, 
                     lookback_days=lookback_days, 
                     end_utc=end_utc,
-                    use_yahoo_fallback=use_yahoo_fallback
+                    use_yahoo_fallback=False
                 )
+                
+                # If MT5 failed and fallback is enabled, try Yahoo Finance
+                if df.empty and use_yahoo_fallback and YFINANCE_AVAILABLE:
+                    logger.info(f"📊 Trying Yahoo Finance for {symbol} {tf}...")
+                    try:
+                        df = self._fetch_yfinance_ohlcv(symbol, tf, end_utc - timedelta(days=lookback_days), end_utc)
+                        if not df.empty:
+                            logger.info(f"✅ Yahoo Finance: {symbol} {tf} - {len(df)} bars")
+                    except Exception as yf_error:
+                        logger.debug(f"Yahoo Finance also failed for {symbol} {tf}: {yf_error}")
                 
                 if not df.empty:
                     results[tf] = df
