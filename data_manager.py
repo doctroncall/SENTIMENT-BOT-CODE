@@ -25,6 +25,17 @@ import threading
 import pandas as pd
 import numpy as np
 
+# Import MT5 connector module
+try:
+    from mt5_connector import MT5Connector, MT5Config, MT5NotAvailableError, normalize_symbol as mt5_normalize_symbol
+    MT5_CONNECTOR_AVAILABLE = True
+except ImportError:
+    MT5Connector = None
+    MT5Config = None
+    MT5NotAvailableError = None
+    mt5_normalize_symbol = None
+    MT5_CONNECTOR_AVAILABLE = False
+
 # Optional dependencies (import inside functions to avoid hard failure)
 try:
     import MetaTrader5 as mt5
@@ -252,9 +263,16 @@ def _call_with_timeout(fn, *, timeout_seconds: float, args: Optional[tuple] = No
 def normalize_symbol(symbol: str) -> str:
     """
     FIXED: Centralized symbol normalization for consistency across the system
+    Uses MT5 connector's normalization if available, otherwise uses local implementation
     """
     if not symbol:
         return ""
+    
+    # Use MT5 connector's normalization if available
+    if MT5_CONNECTOR_AVAILABLE and mt5_normalize_symbol is not None:
+        return mt5_normalize_symbol(symbol)
+    
+    # Fallback to local implementation
     return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
 
 
@@ -348,18 +366,26 @@ class DataManager:
         self.mt5_server = mt5_server
         self.mt5_path = mt5_path
         self._connected = False
-        self.use_mt5 = use_mt5 and MT5_AVAILABLE
+        self.use_mt5 = use_mt5 and (MT5_CONNECTOR_AVAILABLE or MT5_AVAILABLE)
         self.cache_enabled = cache_enabled
         self.max_retries = max_retries
         
+        # MT5 connector instance (production-grade connection manager)
+        self._mt5_connector: Optional[MT5Connector] = None
+        self._use_connector = MT5_CONNECTOR_AVAILABLE and use_mt5
+        
         # Cache for broker-specific symbol names (to avoid repeated lookups)
+        # Note: When using MT5Connector, this cache is maintained by the connector
         self._symbol_cache = {}
         
-        if self.use_mt5 and not MT5_AVAILABLE:
+        if self.use_mt5 and not (MT5_CONNECTOR_AVAILABLE or MT5_AVAILABLE):
             logger.warning("MetaTrader5 package not available. MT5 disabled automatically.")
             self.use_mt5 = False
         
-        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}")
+        if self._use_connector:
+            logger.info("Using production-grade MT5 connector module")
+        
+        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}, Connector={self._use_connector}")
 
     # ----------------------------
     # Connection management
@@ -368,6 +394,7 @@ class DataManager:
         """
         Connect to MT5 with provided credentials.
         Returns True if connected successfully.
+        Uses production-grade MT5Connector if available, otherwise falls back to legacy connection.
         """
         import time as time_module
         start_time = time_module.time()
@@ -382,6 +409,11 @@ class DataManager:
             log_connection("Already connected to MT5")
             return True
 
+        # Use production-grade MT5 connector if available
+        if self._use_connector:
+            return self._connect_with_connector()
+        
+        # Fallback to legacy connection method
         if not MT5_AVAILABLE or mt5 is None:
             connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
             logger.error("MT5 module not available - cannot connect")
@@ -389,7 +421,7 @@ class DataManager:
             return False
 
         connection_logger.info("="*80)
-        connection_logger.info("CONNECTION ATTEMPT STARTED")
+        connection_logger.info("CONNECTION ATTEMPT STARTED (Legacy Method)")
         connection_logger.info("="*80)
         connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
         connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
@@ -540,13 +572,63 @@ class DataManager:
                 pass
             return False
 
+    def _connect_with_connector(self) -> bool:
+        """
+        Connect using production-grade MT5Connector
+        
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            # Create or get connector instance
+            if self._mt5_connector is None:
+                config = MT5Config(
+                    login=self.mt5_login,
+                    password=self.mt5_password,
+                    server=self.mt5_server,
+                    path=self.mt5_path,
+                    max_retries=self.max_retries
+                )
+                self._mt5_connector = MT5Connector.get_instance(config)
+            
+            # Attempt connection
+            connection_logger.info("="*80)
+            connection_logger.info("CONNECTION ATTEMPT STARTED (Production MT5Connector)")
+            connection_logger.info("="*80)
+            log_connection("Attempting to connect to MT5 (using connector)...", f"Server: {self.mt5_server}")
+            
+            if self._mt5_connector.connect():
+                self._connected = True
+                logger.info("Successfully connected using MT5Connector")
+                log_success("Connected to MT5 via connector", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
+                return True
+            else:
+                logger.error("Failed to connect using MT5Connector")
+                log_error("MT5 connection failed", "Could not establish connection via MT5Connector")
+                return False
+        
+        except MT5NotAvailableError as e:
+            logger.error(f"MT5 not available: {e}")
+            log_error("MT5 not available", str(e))
+            return False
+        
+        except Exception as e:
+            logger.exception(f"Error connecting with MT5Connector: {e}")
+            log_error("MT5 connection error", f"Unexpected error: {str(e)}")
+            return False
+    
     def disconnect(self):
         """Disconnect from MT5"""
         if not self._connected:
             return
-            
+        
         try:
-            if self.use_mt5 and MT5_AVAILABLE:
+            # Use connector if available
+            if self._use_connector and self._mt5_connector is not None:
+                self._mt5_connector.disconnect()
+                logger.info("Disconnected from MT5 (via connector)")
+                log_connection("Disconnected from MT5")
+            elif self.use_mt5 and MT5_AVAILABLE:
                 mt5.shutdown()
                 logger.info("Disconnected from MT5")
                 log_connection("Disconnected from MT5")
@@ -577,6 +659,12 @@ class DataManager:
         # Normalize the input
         standard_symbol = normalize_symbol(standard_symbol)
         
+        # Use connector's symbol search if available
+        if self._use_connector and self._mt5_connector is not None:
+            variations = SYMBOL_VARIATIONS.get(standard_symbol, None)
+            return self._mt5_connector.find_symbol(standard_symbol, variations)
+        
+        # Legacy symbol search
         # Check cache first
         if standard_symbol in self._symbol_cache:
             cached = self._symbol_cache[standard_symbol]
@@ -1058,7 +1146,16 @@ class DataManager:
         """Get list of available symbols from MT5"""
         if not self.use_mt5 or not self._connected:
             return list(SYMBOL_MAPPING.keys())
-            
+        
+        # Use connector if available
+        if self._use_connector and self._mt5_connector is not None:
+            try:
+                return self._mt5_connector.get_available_symbols()
+            except Exception as e:
+                logger.error(f"Failed to get MT5 symbols via connector: {e}")
+                return list(SYMBOL_MAPPING.keys())
+        
+        # Legacy method
         try:
             symbols = mt5.symbols_get()
             return [s.name for s in symbols] if symbols else []
