@@ -266,22 +266,9 @@ class DataManager:
             log_connection("Already connected to MT5")
             return True
 
-        # Check if MT5 terminal is running (Windows only)
-        import platform
-        if platform.system() == 'Windows':
-            try:
-                import psutil
-                terminal_running = any('terminal64.exe' in p.name().lower() or 'terminal.exe' in p.name().lower() 
-                                     for p in psutil.process_iter(['name']))
-                if not terminal_running:
-                    logger.warning("MT5 terminal does not appear to be running")
-                    log_warning("MT5 Terminal Warning", "MetaTrader 5 terminal does not appear to be running. Please start MT5 and login first.")
-            except ImportError:
-                # psutil not available, skip check
-                pass
-            except Exception as e:
-                logger.debug(f"Could not check if MT5 terminal is running: {e}")
-
+        # Note: Removed psutil check for terminal running status as it can cause hangs
+        # The MT5 initialize() call will fail anyway if terminal is not running
+        
         log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
         # Initialize MT5
