@@ -92,7 +92,7 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
     
     with col2:
         if mt5_status['enabled'] and not mt5_status['connected']:
-            if st.button("🔌 Connect MT5", use_container_width=True, type="primary"):
+            if st.button("🔌 Connect MT5", width='stretch', type="primary"):
                 with st.spinner("Connecting to MT5..."):
                     success = dashboard.data_manager.connect()
                 if success:
@@ -103,7 +103,7 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
     
     with col3:
         if mt5_status['connected']:
-            if st.button("🔌 Disconnect", use_container_width=True):
+            if st.button("🔌 Disconnect", width='stretch'):
                 dashboard.data_manager.disconnect()
                 st.info("Disconnected from MT5")
                 st.rerun()
@@ -199,7 +199,7 @@ def render_latest_log_table(excel_file: str) -> None:
         # Display with better formatting
         st.dataframe(
             df.tail(20)[display_cols],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             height=400
         )
@@ -243,7 +243,7 @@ def render_reports_section(report_dir: str) -> None:
                     data=data,
                     file_name=selection,
                     mime=mime,
-                    use_container_width=True,
+                    width='stretch',
                 )
             except Exception as e:
                 st.error(f"❌ Failed to load report: {e}")
@@ -266,7 +266,7 @@ def render_health_check(dashboard: Dashboard, show_logs: bool) -> None:
     """Render health check section"""
     st.subheader("🏥 System Health Check")
     
-    if st.button("🔍 Run Health Check", use_container_width=True, type="secondary"):
+    if st.button("🔍 Run Health Check", width='stretch', type="secondary"):
         with st.spinner("Running health check..."):
             ok, out, err = capture_output(dashboard.health_check)
         
@@ -339,7 +339,7 @@ def main() -> None:
     # SIDEBAR - Configuration & Settings
     # ============================================================
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x100/1f77b4/ffffff?text=Trading+Bot", use_container_width=True)
+        st.image("https://via.placeholder.com/300x100/1f77b4/ffffff?text=Trading+Bot", width='stretch')
         st.markdown("---")
         
         st.header("⚙️ Configuration")
@@ -354,7 +354,7 @@ def main() -> None:
                 help="Enter trading symbols separated by commas or newlines"
             )
             
-            if st.button("✅ Apply Symbols", use_container_width=True, type="primary"):
+            if st.button("✅ Apply Symbols", width='stretch', type="primary"):
                 symbols = parse_symbols(symbols_text)
                 if symbols:
                     dashboard.symbols = symbols
@@ -393,10 +393,10 @@ def main() -> None:
         
         # Quick actions
         st.header("⚡ Quick Actions")
-        if st.button("🔄 Refresh Dashboard", use_container_width=True):
+        if st.button("🔄 Refresh Dashboard", width='stretch'):
             st.rerun()
         
-        if st.button("🧹 Clear Cache", use_container_width=True):
+        if st.button("🧹 Clear Cache", width='stretch'):
             st.cache_data.clear()
             st.success("✅ Cache cleared")
         
@@ -463,7 +463,7 @@ def main() -> None:
             st.subheader("🎯 Full Analysis")
             st.markdown("Run complete analysis for all configured symbols")
             
-            if st.button("▶️ Run Full Analysis", use_container_width=True, type="primary"):
+            if st.button("▶️ Run Full Analysis", width='stretch', type="primary"):
                 with st.spinner("🔄 Running full analysis... This may take a few minutes"):
                     result, out, err = capture_output(dashboard.run_full_cycle)
                 
@@ -487,7 +487,7 @@ def main() -> None:
                 label_visibility="collapsed"
             )
             
-            if st.button("▶️ Run Single Analysis", use_container_width=True, type="secondary"):
+            if st.button("▶️ Run Single Analysis", width='stretch', type="secondary"):
                 if manual_symbol.strip():
                     with st.spinner(f"🔄 Analyzing {manual_symbol.strip()}..."):
                         result, out, err = capture_output(dashboard.run_manual_analysis, manual_symbol.strip())
@@ -507,7 +507,7 @@ def main() -> None:
         
         # Quick status display
         st.subheader("📊 Recent Analysis Results")
-        if st.button("🔄 Refresh Status", use_container_width=False):
+        if st.button("🔄 Refresh Status", width='content'):
             with st.spinner("Loading status..."):
                 _, out, err = capture_output(dashboard.show_status)
             if show_logs and out:
@@ -524,7 +524,7 @@ def main() -> None:
             st.subheader("🔍 Run Verification")
             st.markdown("Verify prediction accuracy against actual market movements")
             
-            if st.button("▶️ Verify Predictions", use_container_width=True, type="primary"):
+            if st.button("▶️ Verify Predictions", width='stretch', type="primary"):
                 with st.spinner("🔄 Verifying predictions..."):
                     _, out, err = capture_output(dashboard.run_verification)
                 
@@ -541,7 +541,7 @@ def main() -> None:
             st.subheader("🧠 Run Retraining")
             st.markdown("Retrain sentiment engine based on verified results")
             
-            if st.button("▶️ Run Retraining", use_container_width=True, type="secondary"):
+            if st.button("▶️ Run Retraining", width='stretch', type="secondary"):
                 with st.spinner("🔄 Running retraining... This may take a while"):
                     _, out, err = capture_output(dashboard.run_retrain)
                 
@@ -600,7 +600,7 @@ def main() -> None:
                                     "Accuracy": f"{symbol_acc:.1f}%"
                                 })
                             
-                            st.dataframe(pd.DataFrame(symbol_stats), use_container_width=True, hide_index=True)
+                            st.dataframe(pd.DataFrame(symbol_stats), width='stretch', hide_index=True)
                     else:
                         st.info("📝 No verified predictions yet")
                 else:

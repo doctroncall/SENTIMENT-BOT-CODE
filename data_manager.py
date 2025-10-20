@@ -386,13 +386,16 @@ class DataManager:
             return None
             
         try:
-            df_cache = pd.read_csv(cache_path, parse_dates=["time"])
+            # FIXED: Read CSV without parse_dates to handle missing column errors
+            df_cache = pd.read_csv(cache_path)
             
-            # FIXED: Handle timezone properly
+            # FIXED: Handle timezone properly and parse dates manually
             if 'time' not in df_cache.columns:
                 logger.warning(f"Cache file missing 'time' column: {cache_path}")
                 return None
             
+            # Parse time column manually
+            df_cache['time'] = pd.to_datetime(df_cache['time'])
             df_cache = df_cache.set_index('time')
             
             # Ensure timezone awareness
@@ -475,32 +478,51 @@ class DataManager:
         # Try MT5 first if enabled
         if self.use_mt5:
             if not self._connected:
-                self.connect()
+                logger.info(f"MT5 not connected, attempting to connect...")
+                connected = self.connect()
+                if not connected:
+                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
                 
             if self._connected:
                 try:
+                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
                     df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
                 except Exception as e:
                     logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+                    logger.info(f"Will attempt Yahoo Finance fallback...")
+            else:
+                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
 
         # Fallback to yfinance if allowed and needed
-        if (df.empty or df is None) and use_yahoo_fallback and YFINANCE_AVAILABLE:
-            logger.info(f"Falling back to yfinance for {symbol} {timeframe}")
-            try:
-                df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
-            except Exception as e:
-                logger.error(f"yfinance fallback failed for {symbol}: {e}")
+        if (df.empty or df is None) and use_yahoo_fallback:
+            if not YFINANCE_AVAILABLE:
+                logger.warning(f"Yahoo Finance not available (yfinance not installed)")
+            else:
+                logger.info(f"📊 Attempting Yahoo Finance fallback for {symbol} {timeframe}...")
+                try:
+                    df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully fetched {len(df)} bars from Yahoo Finance")
+                    else:
+                        logger.warning(f"Yahoo Finance returned empty data for {symbol}")
+                except Exception as e:
+                    logger.error(f"yfinance fallback failed for {symbol}: {e}")
 
         # FIXED: Final fallback - create synthetic data only if allowed
         if df.empty:
             allow_synth_env = os.getenv("ALLOW_SYNTHETIC_DATA", "1").strip().lower()
             allow_synth = allow_synth_env in ("1", "true", "yes", "on")
             if allow_synth:
-                logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
+                logger.warning(f"⚠️ All data sources failed for {symbol}. Creating synthetic data for testing.")
                 df = self._create_synthetic_data(start_utc, end_utc, timeframe)
             else:
                 logger.error(
-                    "All data sources failed and synthetic data is disabled (ALLOW_SYNTHETIC_DATA=0)."
+                    f"❌ All data sources failed for {symbol} {timeframe}:"
+                    f"\n  - MT5: {'Not available' if not self.use_mt5 else ('Not connected' if not self._connected else 'Failed')}"
+                    f"\n  - Yahoo Finance: {'Not available' if not YFINANCE_AVAILABLE else 'Failed'}"
+                    f"\n  - Synthetic data: Disabled (ALLOW_SYNTHETIC_DATA={allow_synth_env})"
                 )
             
         # FIXED: Clean and validate data
