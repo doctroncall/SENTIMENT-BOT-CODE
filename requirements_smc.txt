@@ -1,0 +1,75 @@
+# Production-Grade SMC Trading Bot Requirements
+# ==============================================
+
+# Core Data & Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# MetaTrader 5 Integration
+MetaTrader5>=5.0.45
+
+# Configuration Management
+PyYAML>=6.0
+
+# Excel Logging
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# GUI (Streamlit)
+streamlit>=1.28.0
+
+# Optional: Yahoo Finance Fallback
+yfinance>=0.2.28
+
+# Optional: Advanced Features
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Testing (Development)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Code Quality (Development)
+flake8>=6.1.0
+pylint>=3.0.0
+mypy>=1.7.0
+black>=23.0.0
+
+# Performance Monitoring (Optional)
+prometheus-client>=0.19.0
+
+# Logging (Built-in, no install needed)
+# - logging (stdlib)
+# - structlog (optional, advanced)
+
+# Error Tracking (Optional, Production)
+# sentry-sdk>=1.38.0
+
+#===============================================
+# Installation Commands
+#===============================================
+
+# Minimal Install (Core Only):
+# pip install pandas numpy MetaTrader5 PyYAML openpyxl streamlit
+
+# Full Install (All Features):
+# pip install -r requirements_smc.txt
+
+# Development Install (with testing tools):
+# pip install -r requirements_smc.txt
+# pip install pytest pytest-cov flake8 pylint mypy black
+
+#===============================================
+# Notes
+#===============================================
+
+# 1. MetaTrader5 only works on Windows
+#    - Linux/Mac users: Use yfinance fallback
+#
+# 2. PyYAML is new requirement for config files
+#    - Allows easy tuning without code changes
+#
+# 3. Streamlit version matters
+#    - Use 1.28.0+ for best compatibility
+#
+# 4. Optional packages enhance features but aren't required

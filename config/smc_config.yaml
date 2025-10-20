@@ -1,0 +1,102 @@
+# SMC Analysis Configuration
+# ==========================
+# Production-grade configuration for Smart Money Concepts analysis
+
+smc_analysis:
+  enabled: true
+  
+  # Timeframes to analyze
+  timeframes:
+    use: ['D1', 'H4', 'H1']  # Recommended: Higher + Middle + Lower TF
+    weights:
+      # Higher timeframe = more weight
+      W1: 0.40
+      D1: 0.35
+      H4: 0.25
+      H1: 0.15
+      M15: 0.05
+      M5: 0.05
+  
+  # SMC Component Settings
+  components:
+    # Order Block Detection
+    order_blocks:
+      enabled: true
+      min_strength: 60          # Minimum strength to consider (0-100)
+      body_threshold: 0.5       # Minimum body/range ratio
+      max_age_days: 30          # Maximum age of valid OB
+    
+    # Market Structure Analysis
+    market_structure:
+      enabled: true
+      swing_lookback: 5         # Candles to check for swing points
+      min_swing_points: 3       # Minimum swings to determine trend
+    
+    # Fair Value Gap Detection
+    fair_value_gaps:
+      enabled: true
+      min_gap_atr_multiplier: 0.5   # Minimum gap size (0.5 * ATR)
+      atr_period: 14                 # Period for ATR calculation
+      max_unfilled_days: 14          # Max age for unfilled FVG
+  
+  # Bias Calculation
+  bias_calculation:
+    # Signal type weights (must sum to 1.0)
+    signal_weights:
+      market_structure: 0.35    # Strongest signal
+      order_block: 0.30
+      fvg: 0.20
+      momentum: 0.10
+      volume: 0.05
+    
+    # Confidence thresholds (percentage)
+    confidence_thresholds:
+      high: 75      # ≥75% = High confidence
+      medium: 55    # 55-74% = Medium confidence
+      low: 40       # 40-54% = Low confidence
+      # <40% = Neutral (no trade)
+
+# Data Requirements
+data:
+  min_bars_required:
+    D1: 90
+    H4: 180
+    H1: 360
+    M15: 720
+    M5: 1440
+  
+  lookback_days:
+    D1: 90
+    H4: 60
+    H1: 30
+    M15: 14
+    M5: 7
+
+# Performance Settings
+performance:
+  max_analysis_time_seconds: 10
+  cache_enabled: true
+  cache_ttl_hours: 1
+  parallel_timeframe_analysis: false  # Set true for speed (requires testing)
+
+# Logging
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: logs/smc_analysis.log
+  max_file_size_mb: 10
+  backup_count: 5
+
+# Excel Logging
+excel:
+  enabled: true
+  file: smc_analysis_log.xlsx
+  max_rows: 10000
+  auto_backup: true
+  backup_interval_days: 7
+
+# Alerts (future feature)
+alerts:
+  enabled: false
+  high_confidence_threshold: 80
+  notify_on_confluence: true
+  notify_on_structure_break: true
