@@ -46,10 +46,10 @@ except ImportError:
 #   export MT5_LOGIN=12345678
 #   export MT5_PASSWORD="your-password"
 #   export MT5_SERVER="YourBroker-Server"
-MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0") or 0)
-MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
-MT5_SERVER = os.getenv("MT5_SERVER", "")
-MT5_PATH = os.getenv("MT5_PATH", r"C:\\Program Files\\Pepperstone MetaTrader 5\\terminal64.exe")
+MT5_LOGIN = int(os.getenv("MT5_LOGIN", "211744072") or 211744072)
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "dFbKaNLWQ53@9@Z")
+MT5_SERVER = os.getenv("MT5_SERVER", "ExnessKE-MT5Trial9")
+MT5_PATH = os.getenv("MT5_PATH", r"C:\\Program Files\\MetaTrader 5\\terminal64.exe")
 
 # Data cache folder
 DATA_DIR = "data"
@@ -693,4 +693,5 @@ if __name__ == "__main__":
                 
     finally:
         dm.disconnect()
+
         print("\n✅ DataManager test completed")
