@@ -59,6 +59,30 @@ os.makedirs(DATA_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
 
+# Connection-specific logging to file
+connection_logger = logging.getLogger("DataManager.Connection")
+connection_logger.setLevel(logging.DEBUG)
+
+# Create logs directory if it doesn't exist
+LOGS_DIR = "logs"
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# File handler for connection logs
+connection_log_file = os.path.join(LOGS_DIR, f"mt5_connection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+file_handler = logging.FileHandler(connection_log_file)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+connection_logger.addHandler(file_handler)
+
+# Also add console handler for connection logger
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+connection_logger.addHandler(console_handler)
+
+logger.info(f"Connection logging enabled: {connection_log_file}")
+print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+
 # Status monitoring
 try:
     from status_monitor import log_connection, log_data_fetch, log_success, log_error, log_warning, log_cache
@@ -250,86 +274,143 @@ class DataManager:
         Connect to MT5 with provided credentials.
         Returns True if connected successfully.
         """
+        import time as time_module
+        start_time = time_module.time()
+        
+        connection_logger.info("="*80)
+        connection_logger.info("CONNECTION ATTEMPT STARTED")
+        connection_logger.info("="*80)
+        
+        # Step 1: Check if MT5 usage is enabled
+        connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
         if not self.use_mt5:
+            connection_logger.warning("[STEP 1] MT5 usage disabled or MetaTrader5 module missing")
             logger.info("MT5 usage disabled or MetaTrader5 module missing.")
             log_warning("MT5 usage disabled or module missing")
             return False
+        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
 
-        # Check if MT5 module is actually available (not just use_mt5 flag)
+        # Step 2: Check if MT5 module is available
+        connection_logger.debug(f"[STEP 2] Checking MT5 module availability: MT5_AVAILABLE={MT5_AVAILABLE}, mt5={mt5}")
         if not MT5_AVAILABLE or mt5 is None:
+            connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
             logger.error("MT5 module not available - cannot connect")
             log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
             return False
+        connection_logger.debug(f"[STEP 2] ✓ MT5 module is available (elapsed: {time_module.time()-start_time:.3f}s)")
 
-        # If already connected, return True
+        # Step 3: Check if already connected
+        connection_logger.debug(f"[STEP 3] Checking existing connection status: _connected={self._connected}")
         if self._connected:
+            connection_logger.info("[STEP 3] Already connected to MT5")
             log_connection("Already connected to MT5")
             return True
-
-        # Note: Removed psutil check for terminal running status as it can cause hangs
-        # The MT5 initialize() call will fail anyway if terminal is not running
+        connection_logger.debug(f"[STEP 3] ✓ Not currently connected, proceeding (elapsed: {time_module.time()-start_time:.3f}s)")
         
         log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
-        # Initialize MT5
+        # Step 4: Initialize MT5
+        connection_logger.info(f"[STEP 4] Starting MT5 initialization...")
+        connection_logger.debug(f"[STEP 4] MT5 path: {self.mt5_path}")
+        connection_logger.debug(f"[STEP 4] Path exists: {os.path.exists(self.mt5_path) if self.mt5_path else 'N/A'}")
+        
         try:
+            init_start = time_module.time()
             if self.mt5_path and os.path.exists(self.mt5_path):
+                connection_logger.info(f"[STEP 4] Calling mt5.initialize() with path: {self.mt5_path}")
                 logger.info(f"Initializing MT5 with path: {self.mt5_path}")
+                connection_logger.debug(f"[STEP 4] >>> About to call mt5.initialize(path)... THIS MAY HANG <<<")
                 initialized = mt5.initialize(self.mt5_path)
+                connection_logger.debug(f"[STEP 4] <<< mt5.initialize(path) returned: {initialized} (took {time_module.time()-init_start:.3f}s) >>>")
             else:
+                connection_logger.info(f"[STEP 4] Calling mt5.initialize() with auto-detect")
                 logger.info("Initializing MT5 (auto-detect path)")
+                connection_logger.debug(f"[STEP 4] >>> About to call mt5.initialize()... THIS MAY HANG <<<")
                 initialized = mt5.initialize()
-                
+                connection_logger.debug(f"[STEP 4] <<< mt5.initialize() returned: {initialized} (took {time_module.time()-init_start:.3f}s) >>>")
+            
+            connection_logger.info(f"[STEP 4] MT5 initialization result: {initialized} (elapsed: {time_module.time()-start_time:.3f}s)")
+            
             if not initialized:
+                connection_logger.error("[STEP 4] MT5 initialization returned False")
                 error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
+                connection_logger.error(f"[STEP 4] MT5 last_error: {error_info}")
                 error_msg = f"{error_info}" if error_info else "Unknown error"
                 logger.error(f"MT5 initialize failed: {error_msg}")
                 log_error("MT5 initialization failed", 
                          f"{error_msg}\n\nTroubleshooting:\n1. Make sure MT5 terminal is running\n2. Login to MT5 manually first\n3. Enable 'Algo Trading' in MT5\n4. Try restarting MT5 terminal")
                 self._connected = False
                 return False
+            
+            connection_logger.info(f"[STEP 4] ✓ MT5 initialized successfully (elapsed: {time_module.time()-start_time:.3f}s)")
                 
         except Exception as e:
+            connection_logger.exception(f"[STEP 4] EXCEPTION during MT5 initialization: {e}")
             logger.exception(f"Failed to initialize MT5 terminal: {e}")
             log_error("MT5 terminal initialization exception", 
                      f"{str(e)}\n\nThis usually means:\n1. MT5 terminal is not running\n2. MT5 path is incorrect\n3. MT5 needs to be restarted")
             self._connected = False
             return False
 
-        # Login
+        # Step 5: Login to MT5
+        connection_logger.info(f"[STEP 5] Starting MT5 login...")
+        connection_logger.debug(f"[STEP 5] Server: {self.mt5_server}")
+        connection_logger.debug(f"[STEP 5] Login: {self.mt5_login}")
+        connection_logger.debug(f"[STEP 5] Password: {'*' * len(self.mt5_password) if self.mt5_password else 'None'}")
+        
         try:
+            login_start = time_module.time()
             logger.info(f"Attempting login to {self.mt5_server} with account {self.mt5_login}")
+            connection_logger.debug(f"[STEP 5] >>> About to call mt5.login()... THIS MAY HANG <<<")
             authorized = mt5.login(
                 login=self.mt5_login, 
                 password=self.mt5_password, 
                 server=self.mt5_server
             )
+            connection_logger.debug(f"[STEP 5] <<< mt5.login() returned: {authorized} (took {time_module.time()-login_start:.3f}s) >>>")
+            connection_logger.info(f"[STEP 5] MT5 login result: {authorized} (elapsed: {time_module.time()-start_time:.3f}s)")
+            
             if not authorized:
+                connection_logger.error("[STEP 5] MT5 login returned False")
                 error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
+                connection_logger.error(f"[STEP 5] MT5 last_error: {error_info}")
                 error_msg = f"{error_info}" if error_info else "Unknown error"
                 logger.error(f"MT5 login failed: {error_msg}")
                 log_error("MT5 login failed", 
                          f"{error_msg}\n\nPlease check:\n1. Login: {self.mt5_login}\n2. Server: {self.mt5_server}\n3. Password is correct\n4. Account is active")
                 self._connected = False
                 # Clean up after failed login
+                connection_logger.debug("[STEP 5] Calling mt5.shutdown() to clean up...")
                 try:
                     mt5.shutdown()
-                except:
-                    pass
+                    connection_logger.debug("[STEP 5] mt5.shutdown() completed")
+                except Exception as shutdown_err:
+                    connection_logger.error(f"[STEP 5] Error during shutdown: {shutdown_err}")
                 return False
+            
+            connection_logger.info(f"[STEP 5] ✓ MT5 login successful (elapsed: {time_module.time()-start_time:.3f}s)")
                 
         except Exception as e:
+            connection_logger.exception(f"[STEP 5] EXCEPTION during MT5 login: {e}")
             logger.exception(f"MT5 login exception: {e}")
             log_error("MT5 login exception", str(e))
             self._connected = False
             # Clean up after failed login
+            connection_logger.debug("[STEP 5] Calling mt5.shutdown() to clean up after exception...")
             try:
                 mt5.shutdown()
-            except:
-                pass
+                connection_logger.debug("[STEP 5] mt5.shutdown() completed")
+            except Exception as shutdown_err:
+                connection_logger.error(f"[STEP 5] Error during shutdown: {shutdown_err}")
             return False
 
+        # Step 6: Mark as connected
         self._connected = True
+        total_time = time_module.time() - start_time
+        connection_logger.info("="*80)
+        connection_logger.info(f"✅ CONNECTION SUCCESSFUL (Total time: {total_time:.3f}s)")
+        connection_logger.info(f"Server: {self.mt5_server}, Login: {self.mt5_login}")
+        connection_logger.info("="*80)
         logger.info(f"Connected to MT5 (login={self.mt5_login} server={self.mt5_server})")
         log_success(f"Connected to MT5", f"Server: {self.mt5_server}, Login: {self.mt5_login}")
         return True
