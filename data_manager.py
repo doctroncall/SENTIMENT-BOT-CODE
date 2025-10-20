@@ -103,7 +103,14 @@ MT5_TF_MAP = {
 }
 
 # Helper: pandas-friendly column order
+# Core OHLCV data (always fetched)
 COLUMNS = ["time", "open", "high", "low", "close", "tick_volume"]
+
+# Extended columns (optional, fetched if available from broker)
+EXTENDED_COLUMNS = ["real_volume", "spread"]
+
+# Whether to fetch extended data
+FETCH_EXTENDED_DATA = os.getenv("FETCH_EXTENDED_DATA", "1").strip() in ("1", "true", "yes", "on")
 
 
 # ----------------------------
@@ -136,6 +143,7 @@ def safe_timestamp_conversion(dt: datetime) -> int:
 def _mt5_df_from_rates(rates) -> pd.DataFrame:
     """
     Convert MT5 rates list/array to pandas DataFrame with UTC timestamp index.
+    Optionally includes extended data (real_volume, spread) if available.
     """
     if rates is None or len(rates) == 0:
         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
@@ -152,18 +160,30 @@ def _mt5_df_from_rates(rates) -> pd.DataFrame:
             "low": "low",
             "close": "close",
             "tick_volume": "tick_volume",
-            "real_volume": "tick_volume"
         }
         
         # Rename columns if they exist
         df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
         
-        # Ensure we have the required columns
+        # Ensure we have the required core columns
         available_cols = [col for col in COLUMNS if col in df.columns]
         if not available_cols:
             logger.error("No valid columns found in MT5 data")
             return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+        
+        # ENHANCED: Optionally add extended data if available and enabled
+        if FETCH_EXTENDED_DATA:
+            # Add real_volume if available (actual traded volume)
+            if "real_volume" in df.columns:
+                available_cols.append("real_volume")
+                logger.debug("Including real_volume data")
             
+            # Add spread if available (bid/ask spread in points)
+            if "spread" in df.columns:
+                available_cols.append("spread")
+                logger.debug("Including spread data")
+        
+        # Select only available columns and set time index
         df = df[available_cols]
         df = df.set_index("time")
     
