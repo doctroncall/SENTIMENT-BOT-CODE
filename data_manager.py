@@ -143,7 +143,10 @@ console_handler.setFormatter(ConsoleSafeFormatter('%(asctime)s - %(name)s - %(le
 connection_logger.addHandler(console_handler)
 
 logger.info(f"Connection logging enabled: {connection_log_file}")
-print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+try:
+    print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+except UnicodeEncodeError:
+    print(f"\n[LOG] Connection logs will be written to: {connection_log_file}\n")
 
 # Status monitoring
 try:
@@ -368,37 +371,28 @@ class DataManager:
         """
         import time as time_module
         start_time = time_module.time()
-        
-        connection_logger.info("="*80)
-        connection_logger.info("CONNECTION ATTEMPT STARTED")
-        connection_logger.info("="*80)
-        
-        # Step 1: Check if MT5 usage is enabled
-        connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
-        if not self.use_mt5:
-            connection_logger.warning("[STEP 1] MT5 usage disabled or MetaTrader5 module missing")
-            logger.info("MT5 usage disabled or MetaTrader5 module missing.")
-            log_warning("MT5 usage disabled or module missing")
-            return False
-        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
 
-        # Step 2: Check if MT5 module is available
-        connection_logger.debug(f"[STEP 2] Checking MT5 module availability: MT5_AVAILABLE={MT5_AVAILABLE}, mt5={mt5}")
+        # Validate prerequisites
+        if not self.use_mt5:
+            logger.info("MT5 usage disabled or MetaTrader5 module missing.")
+            return False
+
+        if self._connected:
+            connection_logger.info("[STEP 3] Already connected to MT5")
+            log_connection("Already connected to MT5")
+            return True
+
         if not MT5_AVAILABLE or mt5 is None:
             connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
             logger.error("MT5 module not available - cannot connect")
             log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
             return False
-        connection_logger.debug(f"[STEP 2] ✓ MT5 module is available (elapsed: {time_module.time()-start_time:.3f}s)")
 
-        # Step 3: Check if already connected
-        connection_logger.debug(f"[STEP 3] Checking existing connection status: _connected={self._connected}")
-        if self._connected:
-            connection_logger.info("[STEP 3] Already connected to MT5")
-            log_connection("Already connected to MT5")
-            return True
-        connection_logger.debug(f"[STEP 3] ✓ Not currently connected, proceeding (elapsed: {time_module.time()-start_time:.3f}s)")
-        
+        connection_logger.info("="*80)
+        connection_logger.info("CONNECTION ATTEMPT STARTED")
+        connection_logger.info("="*80)
+        connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
+        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
         log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
         # Step 4: Initialize MT5 with timeout and attach-first behavior
@@ -501,61 +495,65 @@ class DataManager:
             connection_logger.info(f"[STEP 5] MT5 login result: {authorized} (elapsed: {time_module.time()-start_time:.3f}s)")
             
             if not authorized:
-                connection_logger.error("[STEP 5] MT5 login returned False")
-                error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
-                connection_logger.error(f"[STEP 5] MT5 last_error: {error_info}")
-                error_msg = f"{error_info}" if error_info else "Unknown error"
-                logger.error(f"MT5 login failed: {error_msg}")
-                log_error("MT5 login failed", 
-                         f"{error_msg}\n\nPlease check:\n1. Login: {self.mt5_login}\n2. Server: {self.mt5_server}\n3. Password is correct\n4. Account is active")
-                self._connected = False
-                # Clean up after failed login
-                connection_logger.debug("[STEP 5] Calling mt5.shutdown() to clean up...")
+                error = mt5.last_error()
+                connection_logger.error(f"Login failed: {error}")
+                logger.error(f"MT5 login failed: {error}")
+                log_error("MT5 login failed",
+                         f"Error: {error}\n\nVerify:\n"
+                         f"• Account: {self.mt5_login}\n"
+                         f"• Server: {self.mt5_server}\n"
+                         "• Password is correct\n"
+                         "• Account is active and not expired")
+                
+                # Cleanup
                 try:
                     mt5.shutdown()
-                    connection_logger.debug("[STEP 5] mt5.shutdown() completed")
-                except Exception as shutdown_err:
-                    connection_logger.error(f"[STEP 5] Error during shutdown: {shutdown_err}")
+                except:
+                    pass
                 return False
             
-            connection_logger.info(f"[STEP 5] ✓ MT5 login successful (elapsed: {time_module.time()-start_time:.3f}s)")
-                
+            # Connection successful
+            self._connected = True
+            connection_logger.info("="*80)
+            connection_logger.info("CONNECTION SUCCESSFUL")
+            connection_logger.info(f"Server: {self.mt5_server} | Account: {self.mt5_login}")
+            connection_logger.info("="*80)
+            logger.info(f"Connected to MT5: {self.mt5_server} (account {self.mt5_login})")
+            log_success("Connected to MT5", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
+            return True
+            
         except Exception as e:
-            connection_logger.exception(f"[STEP 5] EXCEPTION during MT5 login: {e}")
-            logger.exception(f"MT5 login exception: {e}")
-            log_error("MT5 login exception", str(e))
+            connection_logger.exception(f"Connection exception: {e}")
+            logger.exception(f"MT5 connection failed: {e}")
+            log_error("MT5 connection exception",
+                     f"Unexpected error: {str(e)}\n\n"
+                     "This typically indicates:\n"
+                     "• MT5 terminal is not running\n"
+                     "• Installation issue with MetaTrader5 package\n"
+                     "• System compatibility problem")
             self._connected = False
-            # Clean up after failed login
-            connection_logger.debug("[STEP 5] Calling mt5.shutdown() to clean up after exception...")
+            
+            # Cleanup
             try:
                 mt5.shutdown()
-                connection_logger.debug("[STEP 5] mt5.shutdown() completed")
-            except Exception as shutdown_err:
-                connection_logger.error(f"[STEP 5] Error during shutdown: {shutdown_err}")
+            except:
+                pass
             return False
-
-        # Step 6: Mark as connected
-        self._connected = True
-        total_time = time_module.time() - start_time
-        connection_logger.info("="*80)
-        connection_logger.info(f"✅ CONNECTION SUCCESSFUL (Total time: {total_time:.3f}s)")
-        connection_logger.info(f"Server: {self.mt5_server}, Login: {self.mt5_login}")
-        connection_logger.info("="*80)
-        logger.info(f"Connected to MT5 (login={self.mt5_login} server={self.mt5_server})")
-        log_success(f"Connected to MT5", f"Server: {self.mt5_server}, Login: {self.mt5_login}")
-        return True
 
     def disconnect(self):
         """Disconnect from MT5"""
-        if self.use_mt5 and self._connected:
-            try:
+        if not self._connected:
+            return
+            
+        try:
+            if self.use_mt5 and MT5_AVAILABLE:
                 mt5.shutdown()
+                logger.info("Disconnected from MT5")
                 log_connection("Disconnected from MT5")
-            except Exception as e:
-                logger.warning(f"Error during MT5 shutdown: {e}")
-                log_warning("Error during MT5 shutdown", str(e))
-        self._connected = False
-        logger.info("MT5 disconnected")
+        except Exception as e:
+            logger.warning(f"Error during disconnect: {e}")
+        finally:
+            self._connected = False
 
     def is_connected(self) -> bool:
         """Check if connected to MT5"""
@@ -873,25 +871,18 @@ class DataManager:
 
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        # Try MT5 first if enabled
-        if self.use_mt5:
-            if not self._connected:
-                logger.info(f"MT5 not connected, attempting to connect...")
-                connected = self.connect()
-                if not connected:
-                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
-                
-            if self._connected:
-                try:
-                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
-                    df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
-                except Exception as e:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
-                    logger.info(f"Will attempt Yahoo Finance fallback...")
-            else:
-                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
+        # Try MT5 first if enabled and connected
+        if self.use_mt5 and self._connected:
+            try:
+                logger.info(f"Fetching {symbol} {timeframe} from MT5...")
+                df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                if not df.empty:
+                    logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
+            except Exception as e:
+                logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+                logger.info(f"Will attempt Yahoo Finance fallback...")
+        elif self.use_mt5 and not self._connected:
+            logger.warning(f"MT5 not connected - skipping MT5 data fetch. Call connect() first.")
 
         # Fallback to yfinance if allowed and needed
         if (df.empty or df is None) and use_yahoo_fallback:
