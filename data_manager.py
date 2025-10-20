@@ -75,6 +75,21 @@ SYMBOL_MAPPING = {
     "ETHUSD": "ETH-USD",
 }
 
+# Broker-specific symbol variations (for auto-discovery)
+# Different brokers use different suffixes: m (mini), .a, .b, etc.
+SYMBOL_VARIATIONS = {
+    "GBPUSD": ["GBPUSD", "GBPUSDm", "GBPUSD.a", "GBPUSD.", "GBPUSD.raw"],
+    "XAUUSD": ["XAUUSD", "XAUUSDm", "GOLD", "GOLDm", "XAUUSD.", "XAUUSD.a"],
+    "EURUSD": ["EURUSD", "EURUSDm", "EURUSD.a", "EURUSD.", "EURUSD.raw"],
+    "USDJPY": ["USDJPY", "USDJPYm", "USDJPY.a", "USDJPY."],
+    "AUDUSD": ["AUDUSD", "AUDUSDm", "AUDUSD.a", "AUDUSD."],
+    "USDCAD": ["USDCAD", "USDCADm", "USDCAD.a", "USDCAD."],
+    "USDCHF": ["USDCHF", "USDCHFm", "USDCHF.a", "USDCHF."],
+    "NZDUSD": ["NZDUSD", "NZDUSDm", "NZDUSD.a", "NZDUSD."],
+    "BTCUSD": ["BTCUSD", "BTCUSDm", "BTCUSD.", "BTC"],
+    "ETHUSD": ["ETHUSD", "ETHUSDm", "ETHUSD.", "ETH"],
+}
+
 # Timeframe map (string -> mt5 constant)
 MT5_TF_MAP = {
     "M1": mt5.TIMEFRAME_M1 if MT5_AVAILABLE else 1,
@@ -184,6 +199,9 @@ class DataManager:
         self.cache_enabled = cache_enabled
         self.max_retries = max_retries
         
+        # Cache for broker-specific symbol names (to avoid repeated lookups)
+        self._symbol_cache = {}
+        
         if self.use_mt5 and not MT5_AVAILABLE:
             logger.warning("MetaTrader5 package not available. MT5 disabled automatically.")
             self.use_mt5 = False
@@ -258,6 +276,80 @@ class DataManager:
         """Check if connected to MT5"""
         return self._connected
 
+    def find_broker_symbol(self, standard_symbol: str) -> Optional[str]:
+        """
+        Find the broker-specific symbol name from a standard symbol name.
+        Uses SYMBOL_VARIATIONS to check for common variations.
+        Caches results to avoid repeated MT5 queries.
+        
+        Args:
+            standard_symbol: Standard symbol name (e.g., "GBPUSD")
+            
+        Returns:
+            Broker-specific symbol name if found, None otherwise
+        """
+        if not self.use_mt5 or not self._connected:
+            return None
+        
+        # Normalize the input
+        standard_symbol = normalize_symbol(standard_symbol)
+        
+        # Check cache first
+        if standard_symbol in self._symbol_cache:
+            cached = self._symbol_cache[standard_symbol]
+            logger.debug(f"Using cached symbol mapping: {standard_symbol} -> {cached}")
+            return cached
+        
+        # Get variations to try
+        variations = SYMBOL_VARIATIONS.get(standard_symbol, [standard_symbol])
+        
+        logger.info(f"Searching for {standard_symbol} in MT5 (trying {len(variations)} variations)...")
+        
+        # Try each variation
+        for variant in variations:
+            try:
+                symbol_info = mt5.symbol_info(variant)
+                if symbol_info is not None:
+                    logger.info(f"✅ Found broker symbol: {standard_symbol} -> {variant}")
+                    self._symbol_cache[standard_symbol] = variant
+                    return variant
+            except Exception as e:
+                logger.debug(f"Error checking variant {variant}: {e}")
+                continue
+        
+        # If no exact match found, try fuzzy search
+        logger.warning(f"No exact match found for {standard_symbol}, trying fuzzy search...")
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols:
+                # Look for symbols containing the standard name
+                matches = [s.name for s in all_symbols if standard_symbol in s.name.upper()]
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"💡 Fuzzy match found: {standard_symbol} -> {best_match}")
+                    logger.info(f"   Other matches: {', '.join(matches[:5])}")
+                    self._symbol_cache[standard_symbol] = best_match
+                    return best_match
+        except Exception as e:
+            logger.error(f"Error during fuzzy symbol search: {e}")
+        
+        logger.error(f"❌ Could not find broker symbol for {standard_symbol}")
+        logger.error(f"   Tried variations: {', '.join(variations)}")
+        
+        # Log available symbols for troubleshooting
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols and len(all_symbols) > 0:
+                logger.info(f"📋 Broker has {len(all_symbols)} symbols available")
+                # Show first few symbols as examples
+                sample_symbols = [s.name for s in all_symbols[:10]]
+                logger.info(f"   Sample symbols: {', '.join(sample_symbols)}")
+                logger.info(f"   TIP: Run 'python list_mt5_symbols.py' to see all available symbols")
+        except Exception as e:
+            logger.debug(f"Could not list available symbols: {e}")
+        
+        return None
+
     # ----------------------------
     # FIXED: Core fetch routines
     # ----------------------------
@@ -273,9 +365,17 @@ class DataManager:
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
         # FIXED: Normalize symbol consistently
-        symbol = normalize_symbol(symbol)
+        standard_symbol = normalize_symbol(symbol)
         
-        # Check if symbol exists in MT5
+        # FIXED: Auto-discover broker-specific symbol name
+        broker_symbol = self.find_broker_symbol(standard_symbol)
+        if broker_symbol is None:
+            raise ValueError(f"Symbol {standard_symbol} not found in MT5 broker symbols")
+        
+        # Use the broker-specific symbol name
+        symbol = broker_symbol
+        
+        # Verify symbol exists
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
             raise ValueError(f"Symbol {symbol} not found in MT5")

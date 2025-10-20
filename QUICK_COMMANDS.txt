@@ -1,0 +1,49 @@
+╔════════════════════════════════════════════════════════════════╗
+║                  QUICK REFERENCE COMMANDS                      ║
+╚════════════════════════════════════════════════════════════════╝
+
+🔧 FIX YOUR SYMBOLS (DO THIS FIRST):
+═════════════════════════════════════
+  Windows:    fix_symbols.bat
+  Linux/Mac:  ./fix_symbols.sh
+  Direct:     python fix_symbols.py
+
+
+📋 LIST ALL MT5 SYMBOLS:
+═════════════════════════
+  Windows:    list_symbols.bat
+  Linux/Mac:  ./list_symbols.sh
+  Direct:     python list_mt5_symbols.py --all
+
+
+🔍 SEARCH FOR SPECIFIC SYMBOL:
+═══════════════════════════════
+  python list_mt5_symbols.py --search GBPUSD
+  python list_mt5_symbols.py --search XAUUSD
+
+
+🚀 START YOUR APPLICATION:
+═══════════════════════════
+  streamlit run gui.py
+
+
+🧪 TEST DATA FETCHING:
+═══════════════════════
+  python -c "from data_manager import DataManager; \
+  dm = DataManager(); dm.connect(); \
+  df = dm.fetch_ohlcv_for_timeframe('GBPUSD', 'H1', 7); \
+  print(f'Success! {len(df)} bars'); dm.disconnect()"
+
+
+📖 READ DOCUMENTATION:
+═══════════════════════
+  Quick Start:     START_HERE_SYMBOL_FIX.txt
+  Fast Guide:      QUICKSTART_SYMBOL_FIX.md
+  Detailed:        SYMBOL_FIX_GUIDE.md
+  Changes Made:    FIXES_APPLIED_SYMBOL_ISSUE.md
+  Summary:         SOLUTION_SUMMARY.md
+
+
+═══════════════════════════════════════════════════════════════════
+                    START WITH: python fix_symbols.py
+═══════════════════════════════════════════════════════════════════
