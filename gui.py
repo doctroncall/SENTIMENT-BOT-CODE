@@ -199,16 +199,7 @@ def get_mt5_status(dashboard: Dashboard) -> Dict:
 
 def render_mt5_connection_card(dashboard: Dashboard) -> None:
     """Render MT5 connection status card with controls"""
-    import platform
     mt5_status = get_mt5_status(dashboard)
-    
-    # Check if running on non-Windows platform
-    is_windows = platform.system() == 'Windows'
-    
-    # Platform compatibility warning
-    if not is_windows:
-        st.warning("⚠️ **Platform Notice:** MetaTrader5 only works on Windows. You're running on " + platform.system() + ". MT5 features are disabled. Use Yahoo Finance as data source instead.")
-        return
     
     # Connection Status Header
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -236,7 +227,7 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
                     st.success("✅ Connected!")
                     st.rerun()
                 else:
-                    st.error("❌ Connection failed - Check logs for details")
+                    st.error("❌ Connection failed - Check troubleshooting below")
     
     with col3:
         if mt5_status['connected']:
@@ -255,6 +246,39 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
             with col_b:
                 st.text(f"Enabled: {'Yes' if mt5_status['enabled'] else 'No'}")
                 st.text(f"Status: {'Connected' if mt5_status['connected'] else 'Disconnected'}")
+        
+        # Troubleshooting section - only show if not connected
+        if not mt5_status['connected']:
+            with st.expander("🔧 Troubleshooting - Connection Issues", expanded=False):
+                st.markdown("""
+                **If connection gets stuck or fails:**
+                
+                1. **Check MT5 Terminal is Running**
+                   - Open MetaTrader 5 desktop application
+                   - Make sure you're logged in
+                   
+                2. **Verify Credentials**
+                   - Login: {login}
+                   - Server: {server}
+                   - Check these match your MT5 terminal
+                   
+                3. **Restart MT5 Terminal**
+                   - Close MetaTrader 5 completely
+                   - Wait 5 seconds
+                   - Reopen and login
+                   - Try connecting again
+                   
+                4. **Check Terminal Path**
+                   - Default: `C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+                   - Set MT5_PATH environment variable if different
+                   
+                5. **Enable Algo Trading**
+                   - In MT5: Tools → Options → Expert Advisors
+                   - Check "Allow automated trading"
+                   - Check "Allow DLL imports"
+                """.format(login=mt5_status['login'], server=mt5_status['server']))
+                
+                st.info("💡 **Tip:** Most connection issues are fixed by restarting MT5 terminal")
 
 
 def render_system_metrics(dashboard: Dashboard) -> None:
@@ -581,32 +605,14 @@ def main() -> None:
         
         with col1:
             st.subheader("📖 Quick Start Guide")
-            
-            # Check platform and provide appropriate instructions
-            import platform
-            is_windows = platform.system() == 'Windows'
-            
-            if not is_windows:
-                st.markdown("""
-                **Running on non-Windows platform - MT5 not available**
-                
-                1. **Data Source** - System will automatically use Yahoo Finance
-                2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
-                3. **Configure Symbols** - Set your trading symbols in the sidebar
-                4. **Run Analysis** - Go to the Analysis tab to analyze markets
-                5. **View Reports** - Check generated reports in the Reports tab
-                6. **Verify Predictions** - Use the Verification tab to check accuracy
-                """)
-                st.warning("⚠️ MT5 is only available on Windows. Yahoo Finance will be used as data source.")
-            else:
-                st.markdown("""
-                1. **Check MT5 Connection** - Ensure MT5 is connected (see status above)
-                2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
-                3. **Configure Symbols** - Set your trading symbols in the sidebar
-                4. **Run Analysis** - Go to the Analysis tab to analyze markets
-                5. **View Reports** - Check generated reports in the Reports tab
-                6. **Verify Predictions** - Use the Verification tab to check accuracy
-                """)
+            st.markdown("""
+            1. **Check MT5 Connection** - Ensure MT5 is connected (see status above)
+            2. **Monitor Status** - Use the Status Monitor tab to see real-time activity
+            3. **Configure Symbols** - Set your trading symbols in the sidebar
+            4. **Run Analysis** - Go to the Analysis tab to analyze markets
+            5. **View Reports** - Check generated reports in the Reports tab
+            6. **Verify Predictions** - Use the Verification tab to check accuracy
+            """)
             
             st.info("💡 **Pro Tip:** The Status Monitor tab updates every second to show live activity!")
         

@@ -236,20 +236,11 @@ class DataManager:
         # Cache for broker-specific symbol names (to avoid repeated lookups)
         self._symbol_cache = {}
         
-        # Check platform compatibility
-        import platform
-        current_platform = platform.system()
-        
         if self.use_mt5 and not MT5_AVAILABLE:
             logger.warning("MetaTrader5 package not available. MT5 disabled automatically.")
             self.use_mt5 = False
         
-        # Additional platform check
-        if self.use_mt5 and current_platform != 'Windows':
-            logger.warning(f"MT5 only works on Windows. Current platform: {current_platform}. MT5 disabled.")
-            self.use_mt5 = False
-        
-        logger.info(f"DataManager initialized: Platform={current_platform}, MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}")
+        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}")
 
     # ----------------------------
     # Connection management
@@ -267,7 +258,7 @@ class DataManager:
         # Check if MT5 module is actually available (not just use_mt5 flag)
         if not MT5_AVAILABLE or mt5 is None:
             logger.error("MT5 module not available - cannot connect")
-            log_error("MT5 not available", "MetaTrader5 module not installed or not supported on this platform")
+            log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
             return False
 
         # If already connected, return True
@@ -275,69 +266,63 @@ class DataManager:
             log_connection("Already connected to MT5")
             return True
 
+        # Check if MT5 terminal is running (Windows only)
+        import platform
+        if platform.system() == 'Windows':
+            try:
+                import psutil
+                terminal_running = any('terminal64.exe' in p.name().lower() or 'terminal.exe' in p.name().lower() 
+                                     for p in psutil.process_iter(['name']))
+                if not terminal_running:
+                    logger.warning("MT5 terminal does not appear to be running")
+                    log_warning("MT5 Terminal Warning", "MetaTrader 5 terminal does not appear to be running. Please start MT5 and login first.")
+            except ImportError:
+                # psutil not available, skip check
+                pass
+            except Exception as e:
+                logger.debug(f"Could not check if MT5 terminal is running: {e}")
+
         log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
-        # If terminal path is provided, attempt to initialize using it.
+        # Initialize MT5
         try:
-            import platform
-            import signal
-            from contextlib import contextmanager
-            
-            @contextmanager
-            def timeout(seconds):
-                """Context manager for timeout on Unix-like systems"""
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("MT5 initialization timed out")
-                
-                # Only use signal-based timeout on Unix-like systems
-                if hasattr(signal, 'SIGALRM'):
-                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(seconds)
-                    try:
-                        yield
-                    finally:
-                        signal.alarm(0)
-                        signal.signal(signal.SIGALRM, old_handler)
-                else:
-                    # On Windows, no timeout mechanism
-                    yield
-            
-            # Use timeout for initialization (10 seconds)
-            with timeout(10):
-                if self.mt5_path and os.path.exists(self.mt5_path):
-                    initialized = mt5.initialize(self.mt5_path)
-                else:
-                    initialized = mt5.initialize()
+            if self.mt5_path and os.path.exists(self.mt5_path):
+                logger.info(f"Initializing MT5 with path: {self.mt5_path}")
+                initialized = mt5.initialize(self.mt5_path)
+            else:
+                logger.info("Initializing MT5 (auto-detect path)")
+                initialized = mt5.initialize()
                 
             if not initialized:
-                error_msg = str(mt5.last_error()) if hasattr(mt5, 'last_error') else "Unknown error"
+                error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
+                error_msg = f"{error_info}" if error_info else "Unknown error"
                 logger.error(f"MT5 initialize failed: {error_msg}")
-                log_error("MT5 initialization failed", error_msg)
+                log_error("MT5 initialization failed", 
+                         f"{error_msg}\n\nTroubleshooting:\n1. Make sure MT5 terminal is running\n2. Login to MT5 manually first\n3. Enable 'Algo Trading' in MT5\n4. Try restarting MT5 terminal")
                 self._connected = False
                 return False
                 
-        except TimeoutError as e:
-            logger.error("MT5 initialization timed out after 10 seconds")
-            log_error("MT5 initialization timeout", "Connection attempt timed out. MT5 terminal may not be running or accessible.")
-            self._connected = False
-            return False
         except Exception as e:
             logger.exception(f"Failed to initialize MT5 terminal: {e}")
-            log_error("MT5 terminal initialization exception", str(e))
+            log_error("MT5 terminal initialization exception", 
+                     f"{str(e)}\n\nThis usually means:\n1. MT5 terminal is not running\n2. MT5 path is incorrect\n3. MT5 needs to be restarted")
             self._connected = False
             return False
 
         # Login
         try:
+            logger.info(f"Attempting login to {self.mt5_server} with account {self.mt5_login}")
             authorized = mt5.login(
                 login=self.mt5_login, 
                 password=self.mt5_password, 
                 server=self.mt5_server
             )
             if not authorized:
-                error_msg = str(mt5.last_error()) if hasattr(mt5, 'last_error') else "Unknown error"
+                error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
+                error_msg = f"{error_info}" if error_info else "Unknown error"
                 logger.error(f"MT5 login failed: {error_msg}")
-                log_error("MT5 login failed", error_msg)
+                log_error("MT5 login failed", 
+                         f"{error_msg}\n\nPlease check:\n1. Login: {self.mt5_login}\n2. Server: {self.mt5_server}\n3. Password is correct\n4. Account is active")
                 self._connected = False
                 # Clean up after failed login
                 try:
