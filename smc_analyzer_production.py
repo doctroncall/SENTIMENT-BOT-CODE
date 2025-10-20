@@ -542,7 +542,7 @@ class SMCAnalyzer:
     
     def analyze(self, symbol: str, data: Dict[str, pd.DataFrame]) -> Bias:
         """
-        Analyze symbol using SMC concepts (PRODUCTION - minimal logging)
+        Analyze symbol using SMC concepts (PRODUCTION - with timeout protection)
         
         Args:
             symbol: Trading symbol (e.g., 'GBPUSD')
@@ -551,36 +551,71 @@ class SMCAnalyzer:
         Returns:
             Bias object with final trading direction and confidence
         """
-        try:
-            # Validate input data
-            if not self._validate_data(data):
-                return Bias.neutral()
+        import signal
+        from contextlib import contextmanager
+        
+        @contextmanager
+        def analysis_timeout(seconds=30):
+            """Timeout protection for analysis"""
+            def timeout_handler(signum, frame):
+                raise TimeoutError(f"Analysis timed out after {seconds}s")
             
-            # Collect signals from all timeframes
-            all_signals = []
-            
-            for timeframe, df in data.items():
+            if hasattr(signal, 'SIGALRM'):
+                old = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(seconds)
                 try:
-                    signals = self._analyze_timeframe(df, timeframe)
-                    all_signals.extend(signals)
-                except Exception as e:
-                    self.logger.debug(f"Error analyzing {timeframe}: {e}")
-                    continue
-            
-            if not all_signals:
-                return Bias.neutral()
-            
-            # Calculate final bias
-            bias = self.bias_calculator.calculate(all_signals)
-            
-            # Validate result
-            if not self._validate_bias(bias, all_signals):
-                return Bias.neutral()
-            
-            return bias
+                    yield
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old)
+            else:
+                yield  # No timeout on Windows
+        
+        try:
+            # Wrap entire analysis in timeout protection
+            with analysis_timeout(30):
+                # Validate input data
+                if not self._validate_data(data):
+                    self.logger.warning(f"Data validation failed for {symbol}")
+                    return Bias.neutral()
+                
+                # Collect signals from all timeframes
+                all_signals = []
+                
+                for timeframe, df in data.items():
+                    try:
+                        self.logger.debug(f"Analyzing {symbol} {timeframe}...")
+                        signals = self._analyze_timeframe(df, timeframe)
+                        all_signals.extend(signals)
+                        self.logger.debug(f"{symbol} {timeframe}: {len(signals)} signals")
+                    except Exception as e:
+                        self.logger.warning(f"Error analyzing {symbol} {timeframe}: {e}")
+                        continue
+                
+                if not all_signals:
+                    self.logger.warning(f"No signals generated for {symbol}")
+                    return Bias.neutral()
+                
+                # Calculate final bias
+                self.logger.debug(f"Calculating bias for {symbol} from {len(all_signals)} signals...")
+                bias = self.bias_calculator.calculate(all_signals)
+                
+                # Validate result
+                if not self._validate_bias(bias, all_signals):
+                    self.logger.warning(f"Bias validation failed for {symbol}")
+                    return Bias.neutral()
+                
+                self.logger.info(f"✅ {symbol}: {bias.direction.value} ({bias.confidence:.1f}%)")
+                return bias
+        
+        except TimeoutError as e:
+            self.logger.error(f"⏱️ Analysis timeout for {symbol}: {e}")
+            return Bias.neutral()
             
         except Exception as e:
-            self.logger.error(f"SMC analysis error: {e}")
+            self.logger.error(f"❌ SMC analysis error for {symbol}: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
             return Bias.neutral()
     
     def _analyze_timeframe(self, df: pd.DataFrame, timeframe: str) -> List[Signal]:
