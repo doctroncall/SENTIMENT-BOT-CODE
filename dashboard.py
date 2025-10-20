@@ -43,6 +43,12 @@ except ImportError:
     print("❌ Error importing auto_retrain")
     raise
 
+try:
+    from status_monitor import get_monitor, log_info, log_success, log_error, log_warning, log_data_fetch, log_analysis
+except ImportError:
+    print("❌ Error importing status_monitor")
+    raise
+
 
 class Dashboard:
     def __init__(self, symbols: List[str] = None):
@@ -54,6 +60,7 @@ class Dashboard:
         
         # Initialize components
         try:
+            log_info("Initializing Dashboard components...")
             self.data_manager = DataManager()
             self.sentiment_engine = SentimentEngine()
             self.report_generator = ReportGenerator()
@@ -62,9 +69,11 @@ class Dashboard:
             self.excel_file = "sentiment_log.xlsx"
             
             print(f"✅ Dashboard initialized for symbols: {', '.join(self.symbols)}")
+            log_success(f"Dashboard initialized for symbols: {', '.join(self.symbols)}")
             
         except Exception as e:
             print(f"❌ Error initializing dashboard components: {e}")
+            log_error(f"Dashboard initialization failed: {e}")
             raise
 
     # ------------------------------------------
@@ -77,6 +86,8 @@ class Dashboard:
         print(f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
         print("="*60)
         
+        log_analysis(f"Starting full analysis cycle for {len(self.symbols)} symbols")
+        
         results = []
         failed_symbols = []
         
@@ -85,6 +96,8 @@ class Dashboard:
             print(f"🔍 Processing {symbol}...")
             print(f"{'─'*60}")
             
+            log_analysis(f"Processing {symbol}")
+            
             try:
                 # Process single symbol
                 result = self._process_symbol(symbol)
@@ -92,14 +105,17 @@ class Dashboard:
                 if result is not None:
                     results.append(result)
                     print(f"✅ {symbol} processed successfully")
+                    log_success(f"{symbol} processed successfully")
                 else:
                     failed_symbols.append(symbol)
                     print(f"⚠️ {symbol} returned no result")
+                    log_warning(f"{symbol} returned no result")
                     
             except Exception as e:
                 print(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
                 failed_symbols.append(symbol)
+                log_error(f"Error processing {symbol}: {str(e)}")
                 # FIXED: Continue with next symbol instead of stopping
                 continue
 
@@ -113,10 +129,14 @@ class Dashboard:
                 if failed_symbols:
                     print(f"   Failed: {', '.join(failed_symbols)}")
                 print(f"{'='*60}")
+                log_success(f"Full cycle completed: {len(results)}/{len(self.symbols)} successful", 
+                           f"Failed: {', '.join(failed_symbols) if failed_symbols else 'None'}")
             except Exception as e:
                 print(f"❌ Error saving results: {e}")
+                log_error(f"Error saving results: {str(e)}")
         else:
             print(f"\n❌ No results generated - all symbols failed")
+            log_error("Full cycle failed - no results generated")
             
         return results
 
@@ -127,6 +147,7 @@ class Dashboard:
         try:
             # Step 1: Fetch data
             print(f"📊 Fetching data for {symbol}...")
+            log_data_fetch(f"Fetching data for {symbol} (D1, H4, H1)")
             timeframe_data = self.data_manager.get_symbol_data(
                 symbol, 
                 timeframes=["D1", "H4", "H1"], 
@@ -135,13 +156,32 @@ class Dashboard:
             
             if not timeframe_data:
                 print(f"❌ No data retrieved for {symbol}")
+                log_error(f"No data retrieved for {symbol}")
                 return None
+            
+            log_success(f"Data fetched successfully for {symbol}")
             
             # Use daily data as primary timeframe
             df_daily = timeframe_data.get("D1")
             if df_daily is None or df_daily.empty:
                 print(f"⚠️ No daily data for {symbol} - skipping")
+                log_warning(f"No daily data for {symbol}")
                 return None
+            
+            # FIXED: Validate DataFrame has required columns
+            print(f"   DataFrame shape: {df_daily.shape}")
+            print(f"   DataFrame columns: {df_daily.columns.tolist()}")
+            print(f"   DataFrame index name: {df_daily.index.name}")
+            
+            required_cols = ['open', 'high', 'low', 'close']
+            missing_cols = [col for col in required_cols if col not in df_daily.columns]
+            if missing_cols:
+                print(f"❌ Missing required columns: {missing_cols}")
+                print(f"   Available columns: {df_daily.columns.tolist()}")
+                log_error(f"Missing columns in {symbol} data: {missing_cols}")
+                return None
+            
+            print(f"   ✅ All required columns present")
             
             # FIXED: Validate sufficient data
             if len(df_daily) < 200:
@@ -183,9 +223,46 @@ class Dashboard:
     # ------------------------------------------
     # 2️⃣ FIXED: Add Technical Indicators with Validation
     # ------------------------------------------
+    def _validate_dataframe_structure(self, df: pd.DataFrame, symbol: str) -> bool:
+        """Validate that DataFrame has the required structure for analysis"""
+        if df is None or df.empty:
+            print(f"   ❌ DataFrame is None or empty")
+            return False
+        
+        required_cols = ['open', 'high', 'low', 'close']
+        missing = [col for col in required_cols if col not in df.columns]
+        
+        if missing:
+            print(f"   ❌ DataFrame missing required columns: {missing}")
+            print(f"   Available columns: {df.columns.tolist()}")
+            return False
+        
+        # Check for sufficient data
+        if len(df) == 0:
+            print(f"   ❌ DataFrame has no rows")
+            return False
+        
+        # Check for valid data types
+        for col in required_cols:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                print(f"   ❌ Column {col} is not numeric: {df[col].dtype}")
+                return False
+        
+        return True
+    
     def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """FIXED: Add EMA, RSI, MACD with proper error handling"""
         df = df.copy()
+        
+        # Validate input DataFrame
+        if not self._validate_dataframe_structure(df, "indicator calculation"):
+            print(f"   ❌ Invalid DataFrame structure, cannot calculate indicators")
+            # Return DataFrame with default indicator values
+            df["EMA_200"] = df["close"].mean() if "close" in df.columns else 0
+            df["RSI"] = 50
+            df["MACD"] = 0
+            df["MACD_Signal"] = 0
+            return df
         
         try:
             # EMA 200
@@ -223,8 +300,13 @@ class Dashboard:
             
         except Exception as e:
             print(f"   ❌ Error calculating indicators: {e}")
+            import traceback
+            traceback.print_exc()
             # Set default values on error
-            df["EMA_200"] = df["close"].mean()
+            if "close" in df.columns:
+                df["EMA_200"] = df["close"].mean()
+            else:
+                df["EMA_200"] = 0
             df["RSI"] = 50
             df["MACD"] = 0
             df["MACD_Signal"] = 0
