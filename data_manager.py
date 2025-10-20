@@ -261,9 +261,74 @@ class DataManager:
     # ----------------------------
     # FIXED: Core fetch routines
     # ----------------------------
+    def _find_broker_symbol(self, standard_symbol: str) -> Optional[str]:
+        """
+        Find the correct broker-specific symbol variation
+        Tries common variations until one is found
+        """
+        # FIXED: Normalize symbol
+        standard_symbol = normalize_symbol(standard_symbol)
+        
+        # Check cache first
+        if hasattr(self, '_symbol_cache') and standard_symbol in self._symbol_cache:
+            cached = self._symbol_cache[standard_symbol]
+            logger.debug(f"Using cached symbol: {standard_symbol} -> {cached}")
+            return cached
+        
+        # Initialize cache if needed
+        if not hasattr(self, '_symbol_cache'):
+            self._symbol_cache = {}
+        
+        # Common broker symbol variations
+        variations = [
+            standard_symbol,           # Standard: GBPUSD
+            f"{standard_symbol}m",     # Micro lots: GBPUSDm
+            f"{standard_symbol}.a",    # Alternative: GBPUSD.a
+            f"{standard_symbol}.",     # Dot suffix: GBPUSD.
+            f"{standard_symbol}.raw",  # Raw: GBPUSD.raw
+            f"{standard_symbol}#",     # Hash: GBPUSD#
+            f"{standard_symbol}pro",   # Pro: GBPUSDpro
+        ]
+        
+        logger.info(f"Searching for broker symbol: {standard_symbol}")
+        
+        # Try each variation
+        for variant in variations:
+            try:
+                symbol_info = mt5.symbol_info(variant)
+                if symbol_info is not None:
+                    logger.info(f"✅ Found broker symbol: {standard_symbol} -> {variant}")
+                    self._symbol_cache[standard_symbol] = variant
+                    return variant
+            except Exception as e:
+                logger.debug(f"Variant {variant} check failed: {e}")
+                continue
+        
+        # If no exact match found, try fuzzy search
+        logger.warning(f"No exact match for {standard_symbol}, trying fuzzy search...")
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols:
+                # Look for symbols containing the standard name
+                matches = [s.name for s in all_symbols if standard_symbol in s.name.upper()]
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"💡 Fuzzy match found: {standard_symbol} -> {best_match}")
+                    if len(matches) > 1:
+                        logger.info(f"   Other possible matches: {', '.join(matches[1:6])}")
+                    self._symbol_cache[standard_symbol] = best_match
+                    return best_match
+        except Exception as e:
+            logger.error(f"Error during fuzzy symbol search: {e}")
+        
+        logger.error(f"❌ Could not find broker symbol for {standard_symbol}")
+        logger.error(f"   Tried variations: {', '.join(variations)}")
+        return None
+
     def _fetch_mt5_ohlcv(self, symbol: str, timeframe: str, start_utc: datetime, end_utc: datetime) -> pd.DataFrame:
         """
-        FIXED: Fetch OHLCV using MT5 copy_rates_range with improved timezone handling
+        SIMPLIFIED: Fetch OHLCV using MT5 copy_rates_range - single attempt
+        (Retry logic is handled at higher level in fetch_ohlcv_for_timeframe)
         """
         if not self.use_mt5 or not self._connected:
             raise RuntimeError("MT5 usage disabled or not connected")
@@ -272,43 +337,33 @@ class DataManager:
         if tf_const is None:
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-        # FIXED: Normalize symbol consistently
+        # Normalize symbol consistently
         symbol = normalize_symbol(symbol)
         
-        # Check if symbol exists in MT5
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
+        # Find broker-specific symbol variation
+        broker_symbol = self._find_broker_symbol(symbol)
+        if broker_symbol is None:
             raise ValueError(f"Symbol {symbol} not found in MT5")
 
-        # FIXED: Safe timestamp conversion
+        # Safe timestamp conversion
         utc_from = safe_timestamp_conversion(start_utc)
         utc_to = safe_timestamp_conversion(end_utc)
 
-        # Retry logic
-        for attempt in range(self.max_retries):
-            try:
-                rates = mt5.copy_rates_range(symbol, tf_const, utc_from, utc_to)
-                
-                if rates is None or len(rates) == 0:
-                    if attempt < self.max_retries - 1:
-                        logger.warning(f"No rates returned for {symbol} {timeframe} (attempt {attempt + 1})")
-                        time.sleep(1)
-                        continue
-                    else:
-                        logger.warning(f"No rates returned for {symbol} {timeframe} after {self.max_retries} attempts")
-                        return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-                
-                df = _mt5_df_from_rates(rates)
-                logger.info(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
-                return df
-                
-            except Exception as e:
-                if attempt < self.max_retries - 1:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe} (attempt {attempt + 1}): {e}")
-                    time.sleep(2)
-                else:
-                    logger.error(f"MT5 fetch failed for {symbol} {timeframe} after {self.max_retries} attempts: {e}")
-                    raise
+        # Single fetch attempt (retry is handled upstream)
+        try:
+            rates = mt5.copy_rates_range(broker_symbol, tf_const, utc_from, utc_to)
+            
+            if rates is None or len(rates) == 0:
+                logger.warning(f"No rates returned for {broker_symbol} {timeframe}")
+                return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+            
+            df = _mt5_df_from_rates(rates)
+            logger.debug(f"Fetched {len(df)} bars for {symbol} ({broker_symbol}) {timeframe}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"MT5 fetch error for {broker_symbol} {timeframe}: {e}")
+            raise
 
         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
 
@@ -443,18 +498,63 @@ class DataManager:
         except Exception as e:
             logger.warning(f"Failed to cache data to {cache_path}: {e}")
 
+    def _validate_data_robustness(self, df: pd.DataFrame, symbol: str, timeframe: str) -> bool:
+        """
+        Validate data robustness - ensure we have enough quality data
+        
+        Returns:
+            True if data is robust enough for analysis, False otherwise
+        """
+        if df.empty:
+            logger.error(f"❌ No data for {symbol} {timeframe}")
+            return False
+        
+        # Check minimum data points
+        min_bars = 30
+        if len(df) < min_bars:
+            logger.error(f"❌ Insufficient data: {len(df)} bars (minimum {min_bars} required)")
+            return False
+        
+        # Check for critical columns
+        required_cols = ['open', 'high', 'low', 'close']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            logger.error(f"❌ Missing critical columns: {missing_cols}")
+            return False
+        
+        # Check for excessive NaN values
+        for col in required_cols:
+            nan_pct = (df[col].isna().sum() / len(df)) * 100
+            if nan_pct > 10:  # More than 10% NaN is problematic
+                logger.error(f"❌ Too many NaN values in {col}: {nan_pct:.1f}%")
+                return False
+        
+        # Check for data validity (prices should be positive)
+        if (df[required_cols] <= 0).any().any():
+            logger.error(f"❌ Invalid prices detected (zero or negative values)")
+            return False
+        
+        logger.info(f"✅ Data robustness confirmed: {len(df)} valid bars for {symbol} {timeframe}")
+        return True
+
     def fetch_ohlcv_for_timeframe(
         self,
         symbol: str,
         timeframe: str,
         lookback_days: int = 30,
         end_utc: Optional[datetime] = None,
-        use_yahoo_fallback: bool = True,
+        use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
     ) -> pd.DataFrame:
         """
-        FIXED: Public method to fetch OHLCV for a single timeframe with enhanced fallback logic.
+        SIMPLIFIED: Fetch OHLCV for a single timeframe with simple retry logic.
+        
+        Flow:
+        1. Try MT5
+        2. If fails, retry ONCE
+        3. Notify outcome
+        4. No fallbacks by default (clean flow)
         """
-        # FIXED: Ensure end_utc is timezone-aware
+        # Ensure end_utc is timezone-aware
         if end_utc is None:
             end_utc = datetime.now(timezone.utc)
         elif end_utc.tzinfo is None:
@@ -462,80 +562,70 @@ class DataManager:
         
         start_utc = end_utc - timedelta(days=lookback_days)
         
-        # FIXED: Normalize symbol
+        # Normalize symbol
         symbol = normalize_symbol(symbol)
         
-        logger.info(f"Fetching {symbol} {timeframe} for {lookback_days} days")
+        logger.info(f"📊 Fetching {symbol} {timeframe} for {lookback_days} days")
 
         # Try cache first
         cache_path = os.path.join(DATA_DIR, f"{symbol}_{timeframe}.csv")
         cached_df = self._load_from_cache(cache_path, start_utc, end_utc)
         if cached_df is not None and not cached_df.empty:
+            logger.info(f"✅ Using cached data ({len(cached_df)} bars)")
             return cached_df
 
+        # SIMPLIFIED FLOW: MT5 with simple retry
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        # Try MT5 first if enabled
-        if self.use_mt5:
-            if not self._connected:
-                logger.info(f"MT5 not connected, attempting to connect...")
-                connected = self.connect()
-                if not connected:
-                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
-                
-            if self._connected:
-                try:
-                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
-                    df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
-                except Exception as e:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
-                    logger.info(f"Will attempt Yahoo Finance fallback...")
+        if not self.use_mt5:
+            logger.error(f"❌ MT5 disabled - cannot fetch data")
+            return df
+        
+        # Ensure connection
+        if not self._connected:
+            logger.info(f"🔌 MT5 not connected, connecting...")
+            connected = self.connect()
+            if not connected:
+                logger.error(f"❌ Failed to connect to MT5")
+                return df
+        
+        # ATTEMPT 1: Try to fetch data
+        logger.info(f"📡 Attempt 1: Fetching {symbol} {timeframe} from MT5...")
+        try:
+            df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+            if not df.empty:
+                logger.info(f"✅ Attempt 1 successful: {len(df)} bars fetched")
             else:
-                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
-
-        # Fallback to yfinance if allowed and needed
-        if (df.empty or df is None) and use_yahoo_fallback:
-            if not YFINANCE_AVAILABLE:
-                logger.warning(f"Yahoo Finance not available (yfinance not installed)")
-            else:
-                logger.info(f"📊 Attempting Yahoo Finance fallback for {symbol} {timeframe}...")
-                try:
-                    df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from Yahoo Finance")
-                    else:
-                        logger.warning(f"Yahoo Finance returned empty data for {symbol}")
-                except Exception as e:
-                    logger.error(f"yfinance fallback failed for {symbol}: {e}")
-
-        # FIXED: Final fallback - create synthetic data only if allowed
+                logger.warning(f"⚠️ Attempt 1: No data returned")
+        except Exception as e:
+            logger.warning(f"⚠️ Attempt 1 failed: {e}")
+        
+        # RETRY ONCE if first attempt failed
         if df.empty:
-            allow_synth_env = os.getenv("ALLOW_SYNTHETIC_DATA", "1").strip().lower()
-            allow_synth = allow_synth_env in ("1", "true", "yes", "on")
-            if allow_synth:
-                logger.warning(f"⚠️ All data sources failed for {symbol}. Creating synthetic data for testing.")
-                df = self._create_synthetic_data(start_utc, end_utc, timeframe)
-            else:
-                logger.error(
-                    f"❌ All data sources failed for {symbol} {timeframe}:"
-                    f"\n  - MT5: {'Not available' if not self.use_mt5 else ('Not connected' if not self._connected else 'Failed')}"
-                    f"\n  - Yahoo Finance: {'Not available' if not YFINANCE_AVAILABLE else 'Failed'}"
-                    f"\n  - Synthetic data: Disabled (ALLOW_SYNTHETIC_DATA={allow_synth_env})"
-                )
+            logger.info(f"🔄 Retrying once for {symbol} {timeframe}...")
+            time.sleep(2)  # Brief pause before retry
             
-        # FIXED: Clean and validate data
+            try:
+                df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                if not df.empty:
+                    logger.info(f"✅ Retry successful: {len(df)} bars fetched")
+                else:
+                    logger.error(f"❌ Retry failed: No data returned after 2 attempts")
+            except Exception as e:
+                logger.error(f"❌ Retry failed: {e}")
+        
+        # VALIDATE DATA ROBUSTNESS
         if not df.empty:
             df = self._clean_dataframe(df)
             
-            # FIXED: Validate we have enough data
-            if len(df) < 50:
-                logger.warning(f"Insufficient data for {symbol} {timeframe}: only {len(df)} bars")
-            
-            self._save_to_cache(df, cache_path)
+            if self._validate_data_robustness(df, symbol, timeframe):
+                self._save_to_cache(df, cache_path)
+                logger.info(f"✅ SUCCESS: {symbol} {timeframe} data ready for analysis")
+            else:
+                logger.error(f"❌ FAILED: Data quality check failed for {symbol} {timeframe}")
+                df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         else:
-            logger.error(f"No data available for {symbol} {timeframe}")
+            logger.error(f"❌ FAILED: Could not fetch {symbol} {timeframe} after 2 attempts")
 
         return df
 
@@ -624,25 +714,35 @@ class DataManager:
         symbol: str,
         timeframes: Optional[List[str]] = None,
         lookback_days: int = 60,
-        use_yahoo_fallback: bool = True,
+        use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
     ) -> Dict[str, pd.DataFrame]:
         """
-        FIXED: Main convenience method with enhanced error handling per symbol.
+        SIMPLIFIED: Main convenience method - fetch data from MT5 only.
         Returns a dict of DataFrames keyed by timeframe strings.
+        
+        Flow for each timeframe:
+        1. Try MT5
+        2. Retry once if failed
+        3. Validate data robustness
+        4. Report outcome
         """
         if timeframes is None:
             timeframes = ["D1", "H4", "H1"]
 
-        # FIXED: Normalize symbol at entry point
+        # Normalize symbol at entry point
         symbol = normalize_symbol(symbol)
         end_utc = datetime.now(timezone.utc)
         results = {}
         
-        logger.info(f"Fetching data for {symbol} across {len(timeframes)} timeframes")
+        logger.info(f"="*70)
+        logger.info(f"📊 Collecting data for {symbol} across {len(timeframes)} timeframes")
+        logger.info(f"="*70)
         
         for tf in timeframes:
+            logger.info(f"\n🔍 Timeframe: {symbol} {tf}")
+            logger.info(f"-"*70)
+            
             try:
-                logger.info(f"Fetching {symbol} {tf} (last {lookback_days} days)")
                 df = self.fetch_ohlcv_for_timeframe(
                     symbol, tf, 
                     lookback_days=lookback_days, 
@@ -652,16 +752,19 @@ class DataManager:
                 
                 if not df.empty:
                     results[tf] = df
-                    logger.info(f"✅ {symbol} {tf}: {len(df)} bars")
+                    logger.info(f"✅ SUCCESS: {symbol} {tf} - {len(df)} bars ready")
                 else:
-                    logger.warning(f"⚠️ No data for {symbol} {tf}")
+                    logger.error(f"❌ FAILED: {symbol} {tf} - No data available")
                     
             except Exception as e:
-                logger.error(f"❌ Failed to fetch {symbol} {tf}: {e}")
-                # FIXED: Continue with other timeframes even if one fails
+                logger.error(f"❌ FAILED: {symbol} {tf} - Exception: {e}")
 
-        if not results:
-            logger.error(f"❌ No data obtained for {symbol} across any timeframe")
+        logger.info(f"\n{'='*70}")
+        if results:
+            logger.info(f"✅ DATA COLLECTION COMPLETE: {len(results)}/{len(timeframes)} timeframes successful")
+        else:
+            logger.error(f"❌ DATA COLLECTION FAILED: No data for any timeframe")
+        logger.info(f"{'='*70}\n")
             
         return results
 

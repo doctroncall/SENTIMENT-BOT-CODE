@@ -784,89 +784,91 @@ def main() -> None:
             st.info("No reports folder")
     
     # ============================================================
-    # TAB 2: ANALYSIS - RUNNING & COMPLETED
+    # TAB 2: ANALYSIS - RESULTS ONLY (NO RUN BUTTONS)
     # ============================================================
     with tab_analysis:
-        st.header("📊 Analysis")
-        
-        st.subheader("🎯 Run Analysis")
-        mode = st.radio("Mode:", ["Automatic (All Symbols)", "Manual (Single Symbol)"], horizontal=True)
-        
-        if "Automatic" in mode:
-            if st.button("▶️ Run Full Analysis", type="primary"):
-                with st.spinner("Running..."):
-                    result, out, err = capture_output(dashboard.run_full_cycle)
-                if err:
-                    st.error(f"Error: {err}")
-                else:
-                    st.success("Complete!")
-                    st.balloons()
-                if show_logs and out:
-                    with st.expander("Logs"):
-                        st.text(out)
-        else:
-            col_m1, col_m2 = st.columns([3, 1])
-            with col_m1:
-                msym = st.text_input("Symbol", placeholder="GBPUSD")
-            with col_m2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("▶️ Analyze", type="primary", use_container_width=True):
-                    if msym.strip():
-                        with st.spinner(f"Analyzing {msym}..."):
-                            result, out, err = capture_output(dashboard.run_manual_analysis, msym.strip())
-                        if err:
-                            st.error(f"Error: {err}")
-                        else:
-                            st.success("Complete!")
-                        if show_logs and out:
-                            with st.expander("Logs"):
-                                st.text(out)
+        st.header("📊 Analysis Results")
+        st.markdown("*View completed analysis results and predictions. Use the Home tab to run new analyses.*")
         
         st.markdown("---")
         
-        st.subheader("📈 Completed Analyses")
+        st.subheader("📈 Analysis Summary")
         excel_file = getattr(dashboard, "excel_file", "sentiment_log.xlsx")
         if os.path.exists(excel_file):
             df = pd.read_excel(excel_file)
             if not df.empty:
-                col1, col2, col3, col4 = st.columns(4)
+                # Summary metrics
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
-                    st.metric("Total", len(df))
+                    st.metric("Total Analyses", len(df))
                 with col2:
-                    st.metric("Symbols", df["Symbol"].nunique() if "Symbol" in df.columns else 0)
+                    st.metric("Symbols Tracked", df["Symbol"].nunique() if "Symbol" in df.columns else 0)
                 with col3:
                     if "Date" in df.columns:
-                        st.metric("Last", pd.to_datetime(df["Date"]).max().strftime("%Y-%m-%d"))
+                        st.metric("Last Analysis", pd.to_datetime(df["Date"]).max().strftime("%Y-%m-%d"))
+                    else:
+                        st.metric("Last Analysis", "N/A")
                 with col4:
                     today = datetime.now().strftime("%Y-%m-%d")
-                    today_count = (df["Date"].astype(str).str.contains(today)).sum()
-                    st.metric("Today", today_count)
+                    today_count = (df["Date"].astype(str).str.contains(today)).sum() if "Date" in df.columns else 0
+                    st.metric("Today's Analyses", today_count)
+                with col5:
+                    if "Verified" in df.columns:
+                        verified_df = df[df["Verified"].isin(["✅ True", "❌ False"])]
+                        if len(verified_df) > 0:
+                            acc = (verified_df["Verified"] == "✅ True").sum() / len(verified_df) * 100
+                            st.metric("Accuracy", f"{acc:.1f}%")
+                        else:
+                            st.metric("Accuracy", "N/A")
+                    else:
+                        st.metric("Accuracy", "N/A")
                 
                 st.markdown("---")
                 
                 # Filters
+                st.subheader("🔍 Filter & View Results")
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
-                    sym_filter = st.selectbox("Symbol", ["All"] + sorted(df["Symbol"].unique().tolist()) if "Symbol" in df.columns else ["All"])
+                    sym_filter = st.selectbox("Filter by Symbol", ["All"] + sorted(df["Symbol"].unique().tolist()) if "Symbol" in df.columns else ["All"])
                 with col_f2:
-                    bias_filter = st.selectbox("Bias", ["All"] + sorted(df["Final Bias"].unique().tolist()) if "Final Bias" in df.columns else ["All"])
+                    bias_filter = st.selectbox("Filter by Bias", ["All"] + sorted(df["Final Bias"].unique().tolist()) if "Final Bias" in df.columns else ["All"])
                 with col_f3:
-                    count_filter = st.selectbox("Show", [10, 20, 50, "All"], index=1)
+                    count_filter = st.selectbox("Show Entries", [10, 20, 50, 100, "All"], index=1)
                 
+                # Apply filters
                 filt_df = df.copy()
                 if sym_filter != "All":
                     filt_df = filt_df[filt_df["Symbol"] == sym_filter]
                 if bias_filter != "All":
                     filt_df = filt_df[filt_df["Final Bias"] == bias_filter]
                 
+                # Display filtered results
                 cols = [c for c in ["Date", "Symbol", "Final Bias", "Confidence", "Weighted Score", "Verified"] if c in filt_df.columns]
-                display_df = filt_df[cols].tail(count_filter if count_filter != "All" else len(filt_df)).sort_values("Date", ascending=False)
+                if count_filter != "All":
+                    display_df = filt_df[cols].tail(count_filter).sort_values("Date", ascending=False)
+                else:
+                    display_df = filt_df[cols].sort_values("Date", ascending=False)
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True, height=500)
+                
+                # Export option
+                st.markdown("---")
+                col_export1, col_export2 = st.columns([3, 1])
+                with col_export1:
+                    st.markdown("**💾 Export Results**")
+                with col_export2:
+                    csv = display_df.to_csv(index=False)
+                    st.download_button(
+                        label="⬇️ Download CSV",
+                        data=csv,
+                        file_name=f"analysis_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
             else:
-                st.info("No analyses yet")
+                st.info("📝 No analysis results yet. Go to the Home tab and click 'Run Full Analysis' to generate predictions.")
         else:
-            st.info("No data file")
+            st.info("📝 No analysis data file found. Run your first analysis from the Home tab to get started.")
     
     # ============================================================
     # TAB 3: HEALTH - DIAGNOSTICS
