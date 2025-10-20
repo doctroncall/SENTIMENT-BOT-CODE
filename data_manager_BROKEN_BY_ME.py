@@ -15,13 +15,26 @@ Fixed Issues:
 """
 
 import os
+import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
+import threading
 
 import pandas as pd
 import numpy as np
+
+# Import MT5 connector module
+try:
+    from mt5_connector import MT5Connector, MT5Config, MT5NotAvailableError, normalize_symbol as mt5_normalize_symbol
+    MT5_CONNECTOR_AVAILABLE = True
+except ImportError:
+    MT5Connector = None
+    MT5Config = None
+    MT5NotAvailableError = None
+    mt5_normalize_symbol = None
+    MT5_CONNECTOR_AVAILABLE = False
 
 # Optional dependencies (import inside functions to avoid hard failure)
 try:
@@ -56,8 +69,109 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Logging
+# Root/basic logger configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
+logger.propagate = False
+
+# Connection-specific logging to file
+connection_logger = logging.getLogger("DataManager.Connection")
+connection_logger.setLevel(logging.DEBUG)
+# Prevent duplicate messages via root logger handlers
+connection_logger.propagate = False
+# Reset existing handlers to avoid duplicates on Streamlit reruns
+for _h in list(connection_logger.handlers):
+    try:
+        if hasattr(_h, "close"):
+            _h.close()
+    except Exception:
+        pass
+    connection_logger.removeHandler(_h)
+
+# Create logs directory if it doesn't exist
+LOGS_DIR = "logs"
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+def _is_windows_ansi_console() -> bool:
+    """Detect Windows console likely using a non-UTF8 codepage (e.g., cp1252)."""
+    encoding = getattr(sys.stdout, "encoding", None) or ""
+    return os.name == "nt" and encoding.lower() not in ("utf-8", "utf8", "utf_8")
+
+
+class ConsoleSafeFormatter(logging.Formatter):
+    """Formatter that avoids UnicodeEncodeError on Windows ANSI consoles.
+
+    It preserves Unicode on UTF-8-capable terminals, and degrades gracefully
+    on ANSI codepages by replacing a few common symbols with ASCII fallbacks
+    and using a safe re-encode with replacement as a last resort.
+    """
+
+    _REPLACEMENTS = {
+        "✓": "OK",
+        "✅": "OK",
+        "❌": "X",
+        "⚠️": "WARN",
+        "⚠": "WARN",
+        "📊": "STATS",
+        "💡": "TIP",
+        "📋": "INFO",
+        "→": "->",
+        "—": "-",
+        "–": "-",
+        "…": "...",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        if not _is_windows_ansi_console():
+            return formatted
+
+        # Apply targeted replacements for known symbols first
+        for bad, good in self._REPLACEMENTS.items():
+            if bad in formatted:
+                formatted = formatted.replace(bad, good)
+
+        # Ensure string can be encoded by the active console
+        console_encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            formatted.encode(console_encoding)
+            return formatted
+        except Exception:
+            return formatted.encode(console_encoding, errors="replace").decode(console_encoding, errors="replace")
+
+
+# File handler for connection logs (force UTF-8 to support Unicode symbols)
+connection_log_file = os.path.join(LOGS_DIR, f"mt5_connection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+file_handler = logging.FileHandler(connection_log_file, encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+connection_logger.addHandler(file_handler)
+
+# Also add console handler for connection logger (ASCII-safe on Windows ANSI consoles)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(ConsoleSafeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+connection_logger.addHandler(console_handler)
+
+logger.info(f"Connection logging enabled: {connection_log_file}")
+try:
+    print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+except UnicodeEncodeError:
+    print(f"\n[LOG] Connection logs will be written to: {connection_log_file}\n")
+
+# Status monitoring
+try:
+    from status_monitor import log_connection, log_data_fetch, log_success, log_error, log_warning, log_cache
+    STATUS_MONITOR_AVAILABLE = True
+except ImportError:
+    # Fallback stubs if status_monitor not available
+    STATUS_MONITOR_AVAILABLE = False
+    def log_connection(msg, details=None): pass
+    def log_data_fetch(msg, details=None): pass
+    def log_success(msg, details=None): pass
+    def log_error(msg, details=None): pass
+    def log_warning(msg, details=None): pass
+    def log_cache(msg, details=None): pass
 
 # Symbol mapping for different data sources
 SYMBOL_MAPPING = {
@@ -75,6 +189,21 @@ SYMBOL_MAPPING = {
     "ETHUSD": "ETH-USD",
 }
 
+# Broker-specific symbol variations (for auto-discovery)
+# Different brokers use different suffixes: m (mini), .a, .b, etc.
+SYMBOL_VARIATIONS = {
+    "GBPUSD": ["GBPUSD", "GBPUSDm", "GBPUSD.a", "GBPUSD.", "GBPUSD.raw"],
+    "XAUUSD": ["XAUUSD", "XAUUSDm", "GOLD", "GOLDm", "XAUUSD.", "XAUUSD.a"],
+    "EURUSD": ["EURUSD", "EURUSDm", "EURUSD.a", "EURUSD.", "EURUSD.raw"],
+    "USDJPY": ["USDJPY", "USDJPYm", "USDJPY.a", "USDJPY."],
+    "AUDUSD": ["AUDUSD", "AUDUSDm", "AUDUSD.a", "AUDUSD."],
+    "USDCAD": ["USDCAD", "USDCADm", "USDCAD.a", "USDCAD."],
+    "USDCHF": ["USDCHF", "USDCHFm", "USDCHF.a", "USDCHF."],
+    "NZDUSD": ["NZDUSD", "NZDUSDm", "NZDUSD.a", "NZDUSD."],
+    "BTCUSD": ["BTCUSD", "BTCUSDm", "BTCUSD.", "BTC"],
+    "ETHUSD": ["ETHUSD", "ETHUSDm", "ETHUSD.", "ETH"],
+}
+
 # Timeframe map (string -> mt5 constant)
 MT5_TF_MAP = {
     "M1": mt5.TIMEFRAME_M1 if MT5_AVAILABLE else 1,
@@ -88,19 +217,51 @@ MT5_TF_MAP = {
 }
 
 # Helper: pandas-friendly column order
+# Core OHLCV data (always fetched)
 COLUMNS = ["time", "open", "high", "low", "close", "tick_volume"]
 
+# Extended columns (optional, fetched if available from broker)
+EXTENDED_COLUMNS = ["real_volume", "spread"]
+
+# Whether to fetch extended data
+FETCH_EXTENDED_DATA = os.getenv("FETCH_EXTENDED_DATA", "1").strip() in ("1", "true", "yes", "on")
+
+# MT5 connection behavior (tunable via env)
+MT5_ATTACH_FIRST = os.getenv("MT5_ATTACH_FIRST", "1").strip().lower() in ("1", "true", "yes", "on")
+MT5_INIT_TIMEOUT_MS = int(os.getenv("MT5_INIT_TIMEOUT_MS", "12000"))
+MT5_LOGIN_TIMEOUT_MS = int(os.getenv("MT5_LOGIN_TIMEOUT_MS", "12000"))
+
+
+def _call_with_timeout(fn, *, timeout_seconds: float, args: Optional[tuple] = None, kwargs: Optional[dict] = None):
+    """Run a callable in a daemon thread, returning (completed, result, error).
+
+    This guards against 3rd-party calls that may hang (e.g., mt5.initialize/login).
+    """
+    args = args or ()
+    kwargs = kwargs or {}
+    container = {"done": False, "result": None, "error": None}
+
+    def runner():
+        try:
+            container["result"] = fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            container["error"] = exc
+        finally:
+            container["done"] = True
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if not container["done"]:
+        return False, None, TimeoutError(f"Call timed out after {timeout_seconds:.1f}s")
+    return True, container["result"], container["error"]
+
 
 # ----------------------------
-# FIXED: Centralized Utility Functions
+# FIXED: Import Centralized Utility Functions
 # ----------------------------
-def normalize_symbol(symbol: str) -> str:
-    """
-    FIXED: Centralized symbol normalization for consistency across the system
-    """
-    if not symbol:
-        return ""
-    return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+# Import centralized symbol normalization (single source of truth)
+from symbol_utils import normalize_symbol
 
 
 def safe_timestamp_conversion(dt: datetime) -> int:
@@ -121,36 +282,49 @@ def safe_timestamp_conversion(dt: datetime) -> int:
 def _mt5_df_from_rates(rates) -> pd.DataFrame:
     """
     Convert MT5 rates list/array to pandas DataFrame with UTC timestamp index.
+    Optionally includes extended data (real_volume, spread) if available.
     """
     if rates is None or len(rates) == 0:
-        return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+        logger.warning("No rates data provided to _mt5_df_from_rates")
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
     
     df = pd.DataFrame(list(rates))
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-        
-        # Handle different column name variations
-        column_mapping = {
-            "time": "time",
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "tick_volume": "tick_volume",
-            "real_volume": "tick_volume"
-        }
-        
-        # Rename columns if they exist
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        
-        # Ensure we have the required columns
-        available_cols = [col for col in COLUMNS if col in df.columns]
-        if not available_cols:
-            logger.error("No valid columns found in MT5 data")
-            return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-            
-        df = df[available_cols]
-        df = df.set_index("time")
+    
+    # Debug: log available columns
+    logger.debug(f"MT5 data columns: {df.columns.tolist()}")
+    
+    if "time" not in df.columns:
+        logger.error("MT5 data missing 'time' column")
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
+    
+    # Convert time to datetime with UTC timezone
+    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+    
+    # Build list of columns to keep (excluding 'time' which will be the index)
+    cols_to_keep = []
+    
+    # Core OHLCV columns (required)
+    for col in ['open', 'high', 'low', 'close', 'tick_volume']:
+        if col in df.columns:
+            cols_to_keep.append(col)
+        else:
+            logger.error(f"Missing required column: {col}")
+            return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
+    
+    # Optional extended columns
+    if FETCH_EXTENDED_DATA:
+        if "real_volume" in df.columns:
+            cols_to_keep.append("real_volume")
+            logger.debug("Including real_volume data")
+        if "spread" in df.columns:
+            cols_to_keep.append("spread")
+            logger.debug("Including spread data")
+    
+    # Set time as index and select only relevant columns
+    df = df.set_index("time")
+    df = df[cols_to_keep]
+    
+    logger.debug(f"Processed DataFrame shape: {df.shape}, columns: {df.columns.tolist()}")
     
     return df
 
@@ -180,83 +354,213 @@ class DataManager:
         self.mt5_server = mt5_server
         self.mt5_path = mt5_path
         self._connected = False
-        self.use_mt5 = use_mt5 and MT5_AVAILABLE
+        self.use_mt5 = use_mt5 and (MT5_CONNECTOR_AVAILABLE or MT5_AVAILABLE)
         self.cache_enabled = cache_enabled
         self.max_retries = max_retries
         
-        if self.use_mt5 and not MT5_AVAILABLE:
+        # MT5 connector instance (production-grade connection manager)
+        self._mt5_connector: Optional[MT5Connector] = None
+        self._use_connector = MT5_CONNECTOR_AVAILABLE and use_mt5
+        
+        # Cache for broker-specific symbol names (to avoid repeated lookups)
+        # Note: When using MT5Connector, this cache is maintained by the connector
+        self._symbol_cache = {}
+        
+        if self.use_mt5 and not (MT5_CONNECTOR_AVAILABLE or MT5_AVAILABLE):
             logger.warning("MetaTrader5 package not available. MT5 disabled automatically.")
             self.use_mt5 = False
         
-        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}")
+        if self._use_connector:
+            logger.info("Using production-grade MT5 connector module")
+        
+        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}, Connector={self._use_connector}")
 
     # ----------------------------
     # Connection management
     # ----------------------------
     def connect(self) -> bool:
         """
-        Connect to MT5 with provided credentials.
-        Returns True if connected successfully.
+        Connect to MT5 using production-grade MT5Connector.
+        
+        Returns:
+            True if connected successfully, False otherwise
         """
+        # Validate prerequisites
         if not self.use_mt5:
             logger.info("MT5 usage disabled or MetaTrader5 module missing.")
             return False
 
-        # If already connected, return True
-        if self._connected:
+        # Check if already connected via singleton
+        if self._mt5_connector is not None and self._mt5_connector.is_connected():
+            connection_logger.info("Already connected via MT5Connector singleton")
+            self._connected = True
+            log_connection("Already connected to MT5")
             return True
 
-        # If terminal path is provided, attempt to initialize using it.
         try:
-            if self.mt5_path and os.path.exists(self.mt5_path):
-                initialized = mt5.initialize(self.mt5_path)
+            # Create or get connector instance
+            if self._mt5_connector is None:
+                if not MT5_CONNECTOR_AVAILABLE:
+                    logger.error("MT5Connector not available - cannot connect")
+                    log_error("MT5Connector not available", 
+                             "MT5Connector module is required. Check mt5_connector.py")
+                    return False
+                
+                config = MT5Config(
+                    login=self.mt5_login,
+                    password=self.mt5_password,
+                    server=self.mt5_server,
+                    path=self.mt5_path,
+                    max_retries=self.max_retries
+                )
+                self._mt5_connector = MT5Connector.get_instance(config)
+            
+            # Attempt connection
+            connection_logger.info("="*80)
+            connection_logger.info("CONNECTION ATTEMPT (Production MT5Connector)")
+            connection_logger.info("="*80)
+            log_connection("Connecting to MT5...", f"Server: {self.mt5_server}")
+            
+            if self._mt5_connector.connect():
+                # SYNC state with connector
+                self._connected = self._mt5_connector.is_connected()
+                logger.info("Successfully connected using MT5Connector")
+                log_success("Connected to MT5", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
+                return True
             else:
-                initialized = mt5.initialize()
-                
-            if not initialized:
-                logger.error(f"MT5 initialize failed: {mt5.last_error()}")
+                logger.error("Failed to connect using MT5Connector")
+                log_error("MT5 connection failed", "Could not establish connection")
                 self._connected = False
                 return False
-                
-        except Exception as e:
-            logger.exception(f"Failed to initialize MT5 terminal: {e}")
+        
+        except MT5NotAvailableError as e:
+            logger.error(f"MT5 not available: {e}")
+            log_error("MT5 not available", str(e))
             self._connected = False
             return False
-
-        # Login
-        try:
-            authorized = mt5.login(
-                login=self.mt5_login, 
-                password=self.mt5_password, 
-                server=self.mt5_server
-            )
-            if not authorized:
-                logger.error(f"MT5 login failed: {mt5.last_error()}")
-                self._connected = False
-                return False
-                
+        
         except Exception as e:
-            logger.exception(f"MT5 login exception: {e}")
+            logger.exception(f"Error connecting with MT5Connector: {e}")
+            log_error("MT5 connection error", f"Unexpected error: {str(e)}")
             self._connected = False
             return False
-
-        self._connected = True
-        logger.info(f"Connected to MT5 (login={self.mt5_login} server={self.mt5_server})")
-        return True
-
+    
     def disconnect(self):
         """Disconnect from MT5"""
-        if self.use_mt5 and self._connected:
-            try:
-                mt5.shutdown()
-            except Exception as e:
-                logger.warning(f"Error during MT5 shutdown: {e}")
-        self._connected = False
-        logger.info("MT5 disconnected")
+        if not self._connected:
+            return
+        
+        try:
+            # Always use connector for disconnect
+            if self._mt5_connector is not None:
+                self._mt5_connector.disconnect()
+                logger.info("Disconnected from MT5 (via connector)")
+                log_connection("Disconnected from MT5")
+        except Exception as e:
+            logger.warning(f"Error during disconnect: {e}")
+        finally:
+            self._connected = False
 
     def is_connected(self) -> bool:
-        """Check if connected to MT5"""
+        """Check if connected to MT5 (synchronized with connector)"""
+        # Always sync with connector state (source of truth)
+        if self._mt5_connector is not None:
+            self._connected = self._mt5_connector.is_connected()
         return self._connected
+    
+    def _validate_connection_state(self):
+        """Validate that internal state matches connector state"""
+        if self._mt5_connector is not None:
+            connector_connected = self._mt5_connector.is_connected()
+            if self._connected != connector_connected:
+                logger.warning(
+                    f"Connection state mismatch detected! "
+                    f"DataManager._connected={self._connected}, "
+                    f"MT5Connector.is_connected()={connector_connected}. "
+                    f"Syncing to connector state."
+                )
+                # Sync to connector state (source of truth)
+                self._connected = connector_connected
+
+    def find_broker_symbol(self, standard_symbol: str) -> Optional[str]:
+        """
+        Find the broker-specific symbol name from a standard symbol name.
+        Uses SYMBOL_VARIATIONS to check for common variations.
+        Caches results to avoid repeated MT5 queries.
+        
+        Args:
+            standard_symbol: Standard symbol name (e.g., "GBPUSD")
+            
+        Returns:
+            Broker-specific symbol name if found, None otherwise
+        """
+        if not self.use_mt5 or not self._connected:
+            return None
+        
+        # Normalize the input
+        standard_symbol = normalize_symbol(standard_symbol)
+        
+        # Use connector's symbol search if available
+        if self._use_connector and self._mt5_connector is not None:
+            variations = SYMBOL_VARIATIONS.get(standard_symbol, None)
+            return self._mt5_connector.find_symbol(standard_symbol, variations)
+        
+        # Legacy symbol search
+        # Check cache first
+        if standard_symbol in self._symbol_cache:
+            cached = self._symbol_cache[standard_symbol]
+            logger.debug(f"Using cached symbol mapping: {standard_symbol} -> {cached}")
+            return cached
+        
+        # Get variations to try
+        variations = SYMBOL_VARIATIONS.get(standard_symbol, [standard_symbol])
+        
+        logger.info(f"Searching for {standard_symbol} in MT5 (trying {len(variations)} variations)...")
+        
+        # Try each variation
+        for variant in variations:
+            try:
+                symbol_info = mt5.symbol_info(variant)
+                if symbol_info is not None:
+                    logger.info(f"✅ Found broker symbol: {standard_symbol} -> {variant}")
+                    self._symbol_cache[standard_symbol] = variant
+                    return variant
+            except Exception as e:
+                logger.debug(f"Error checking variant {variant}: {e}")
+                continue
+        
+        # If no exact match found, try fuzzy search
+        logger.warning(f"No exact match found for {standard_symbol}, trying fuzzy search...")
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols:
+                # Look for symbols containing the standard name
+                matches = [s.name for s in all_symbols if standard_symbol in s.name.upper()]
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"💡 Fuzzy match found: {standard_symbol} -> {best_match}")
+                    logger.info(f"   Other matches: {', '.join(matches[:5])}")
+                    self._symbol_cache[standard_symbol] = best_match
+                    return best_match
+        except Exception as e:
+            logger.error(f"Error during fuzzy symbol search: {e}")
+        
+        logger.error(f"❌ Could not find broker symbol for {standard_symbol}")
+        logger.error(f"   Tried variations: {', '.join(variations)}")
+        
+        # Log available symbols for troubleshooting
+        try:
+            all_symbols = mt5.symbols_get()
+            if all_symbols and len(all_symbols) > 0:
+                logger.info(f"📋 Broker has {len(all_symbols)} symbols available")
+                # Show first few symbols as examples
+                sample_symbols = [s.name for s in all_symbols[:10]]
+                logger.info(f"   Sample symbols: {', '.join(sample_symbols)}")
+                logger.info(f"   TIP: Run 'python list_mt5_symbols.py' to see all available symbols")
+        except Exception as e:
+            logger.debug(f"Could not list available symbols: {e}")
+        
+        return None
 
     # ----------------------------
     # FIXED: Core fetch routines
@@ -266,16 +570,29 @@ class DataManager:
         FIXED: Fetch OHLCV using MT5 copy_rates_range with improved timezone handling
         """
         if not self.use_mt5 or not self._connected:
+            log_error("MT5 fetch failed - not connected")
             raise RuntimeError("MT5 usage disabled or not connected")
 
         tf_const = MT5_TF_MAP.get(timeframe.upper())
         if tf_const is None:
+            log_error(f"Unsupported timeframe: {timeframe}")
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
         # FIXED: Normalize symbol consistently
-        symbol = normalize_symbol(symbol)
+        standard_symbol = normalize_symbol(symbol)
         
-        # Check if symbol exists in MT5
+        log_data_fetch(f"Fetching {standard_symbol} {timeframe} from MT5")
+        
+        # FIXED: Auto-discover broker-specific symbol name
+        broker_symbol = self.find_broker_symbol(standard_symbol)
+        if broker_symbol is None:
+            log_error(f"Symbol {standard_symbol} not found in MT5")
+            raise ValueError(f"Symbol {standard_symbol} not found in MT5 broker symbols")
+        
+        # Use the broker-specific symbol name
+        symbol = broker_symbol
+        
+        # Verify symbol exists
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
             raise ValueError(f"Symbol {symbol} not found in MT5")
@@ -292,14 +609,17 @@ class DataManager:
                 if rates is None or len(rates) == 0:
                     if attempt < self.max_retries - 1:
                         logger.warning(f"No rates returned for {symbol} {timeframe} (attempt {attempt + 1})")
+                        log_warning(f"Retry {attempt + 1}/{self.max_retries} for {symbol} {timeframe}")
                         time.sleep(1)
                         continue
                     else:
                         logger.warning(f"No rates returned for {symbol} {timeframe} after {self.max_retries} attempts")
+                        log_error(f"No data returned for {symbol} {timeframe} after {self.max_retries} attempts")
                         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
                 
                 df = _mt5_df_from_rates(rates)
                 logger.info(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
+                log_success(f"Fetched {len(df)} bars for {symbol} {timeframe} from MT5")
                 return df
                 
             except Exception as e:
@@ -317,6 +637,7 @@ class DataManager:
         FIXED: Fallback to yfinance with improved error handling
         """
         if not YFINANCE_AVAILABLE:
+            log_error("yfinance not available for fallback")
             raise RuntimeError("yfinance not available for fallback")
 
         # Map timeframes to yfinance intervals
@@ -328,6 +649,8 @@ class DataManager:
         yf_tf = tf_map.get(timeframe.upper(), "1d")
         yf_symbol = _get_yahoo_symbol(symbol)
 
+        log_data_fetch(f"Fetching {symbol} {timeframe} from Yahoo Finance (fallback)")
+
         try:
             # yfinance expects timezone-naive dates
             start_naive = start_utc.replace(tzinfo=None) if start_utc.tzinfo else start_utc
@@ -338,6 +661,7 @@ class DataManager:
             
             if df.empty:
                 logger.warning(f"No data from yfinance for {yf_symbol} {timeframe}")
+                log_warning(f"No data from Yahoo Finance for {symbol} {timeframe}")
                 return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
 
             # Standardize column names and format
@@ -374,6 +698,7 @@ class DataManager:
                 }).dropna()
             
             logger.info(f"Fetched {len(df)} bars for {yf_symbol} {timeframe} from yfinance")
+            log_success(f"Fetched {len(df)} bars for {symbol} {timeframe} from Yahoo Finance")
             return df
             
         except Exception as e:
@@ -454,6 +779,9 @@ class DataManager:
         """
         FIXED: Public method to fetch OHLCV for a single timeframe with enhanced fallback logic.
         """
+        # Validate connection state before fetching
+        self._validate_connection_state()
+        
         # FIXED: Ensure end_utc is timezone-aware
         if end_utc is None:
             end_utc = datetime.now(timezone.utc)
@@ -475,25 +803,18 @@ class DataManager:
 
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        # Try MT5 first if enabled
-        if self.use_mt5:
-            if not self._connected:
-                logger.info(f"MT5 not connected, attempting to connect...")
-                connected = self.connect()
-                if not connected:
-                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
-                
-            if self._connected:
-                try:
-                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
-                    df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
-                except Exception as e:
-                    logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
-                    logger.info(f"Will attempt Yahoo Finance fallback...")
-            else:
-                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
+        # Try MT5 first if enabled and connected
+        if self.use_mt5 and self._connected:
+            try:
+                logger.info(f"Fetching {symbol} {timeframe} from MT5...")
+                df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                if not df.empty:
+                    logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
+            except Exception as e:
+                logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+                logger.info(f"Will attempt Yahoo Finance fallback...")
+        elif self.use_mt5 and not self._connected:
+            logger.warning(f"MT5 not connected - skipping MT5 data fetch. Call connect() first.")
 
         # Fallback to yfinance if allowed and needed
         if (df.empty or df is None) and use_yahoo_fallback:
@@ -669,7 +990,16 @@ class DataManager:
         """Get list of available symbols from MT5"""
         if not self.use_mt5 or not self._connected:
             return list(SYMBOL_MAPPING.keys())
-            
+        
+        # Use connector if available
+        if self._use_connector and self._mt5_connector is not None:
+            try:
+                return self._mt5_connector.get_available_symbols()
+            except Exception as e:
+                logger.error(f"Failed to get MT5 symbols via connector: {e}")
+                return list(SYMBOL_MAPPING.keys())
+        
+        # Legacy method
         try:
             symbols = mt5.symbols_get()
             return [s.name for s in symbols] if symbols else []
