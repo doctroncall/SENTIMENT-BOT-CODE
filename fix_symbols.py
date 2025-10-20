@@ -97,7 +97,6 @@ def main():
                 test_symbol,
                 "H1",
                 lookback_days=7,
-                use_yahoo_fallback=False
             )
             
             if not df.empty:

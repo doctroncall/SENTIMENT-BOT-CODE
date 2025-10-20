@@ -33,12 +33,7 @@ except ImportError:
     mt5 = None
     MT5_AVAILABLE = False
 
-try:
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-except ImportError:
-    yf = None
-    YFINANCE_AVAILABLE = False
+# Yahoo Finance dependency removed — MT5-only operation
 
 # ----------------------------
 # CONFIG (DEV / HARDCODED)
@@ -162,21 +157,11 @@ except ImportError:
     def log_warning(msg, details=None): pass
     def log_cache(msg, details=None): pass
 
-# Symbol mapping for different data sources
-SYMBOL_MAPPING = {
-    # MT5 to Yahoo Finance mapping
-    "GBPUSD": "GBPUSD=X",
-    "XAUUSD": "GC=F",  # Gold futures
-    "EURUSD": "EURUSD=X",
-    "USDJPY": "USDJPY=X",
-    "AUDUSD": "AUDUSD=X",
-    "USDCAD": "USDCAD=X",
-    "USDCHF": "USDCHF=X",
-    "NZDUSD": "NZDUSD=X",
-    "XAGUSD": "SI=F",  # Silver futures
-    "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD",
-}
+# Default symbols list for UX fallbacks when MT5 isn't connected
+DEFAULT_SYMBOLS = [
+    "GBPUSD", "XAUUSD", "EURUSD", "USDJPY", "AUDUSD",
+    "USDCAD", "USDCHF", "NZDUSD", "BTCUSD", "ETHUSD",
+]
 
 # Broker-specific symbol variations (for auto-discovery)
 # Different brokers use different suffixes: m (mini), .a, .b, etc.
@@ -323,10 +308,7 @@ def _mt5_df_from_rates(rates) -> pd.DataFrame:
     return df
 
 
-def _get_yahoo_symbol(mt5_symbol: str) -> str:
-    """Get Yahoo Finance symbol equivalent"""
-    normalized = normalize_symbol(mt5_symbol)
-    return SYMBOL_MAPPING.get(normalized, f"{normalized}=X")
+# Yahoo Finance symbol mapping removed — MT5-only
 
 
 # ----------------------------
@@ -359,7 +341,7 @@ class DataManager:
             logger.warning("MetaTrader5 package not available. MT5 disabled automatically.")
             self.use_mt5 = False
         
-        logger.info(f"DataManager initialized: MT5={self.use_mt5}, Yahoo={YFINANCE_AVAILABLE}")
+        logger.info(f"DataManager initialized: MT5={self.use_mt5}")
 
     # ----------------------------
     # Connection management
@@ -386,6 +368,14 @@ class DataManager:
             connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
             logger.error("MT5 module not available - cannot connect")
             log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
+            return False
+
+        # Guard: MT5 Python API works only on Windows
+        if os.name != "nt":
+            connection_logger.error("[STEP 2] Unsupported OS for MT5 (requires Windows)")
+            logger.error("MT5 is only supported on Windows. Current OS is not Windows.")
+            log_error("MT5 unsupported OS", "MetaTrader 5 Python API requires Windows (win32)")
+            self._connected = False
             return False
 
         connection_logger.info("="*80)
@@ -703,78 +693,7 @@ class DataManager:
 
         return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
 
-    def _fetch_yfinance_ohlcv(self, symbol: str, timeframe: str, start_utc: datetime, end_utc: datetime) -> pd.DataFrame:
-        """
-        FIXED: Fallback to yfinance with improved error handling
-        """
-        if not YFINANCE_AVAILABLE:
-            log_error("yfinance not available for fallback")
-            raise RuntimeError("yfinance not available for fallback")
-
-        # Map timeframes to yfinance intervals
-        tf_map = {
-            "D1": "1d", "H4": "1h", "H1": "1h", "M15": "15m", 
-            "M5": "5m", "M1": "1m", "W1": "1wk", "MN1": "1mo"
-        }
-        
-        yf_tf = tf_map.get(timeframe.upper(), "1d")
-        yf_symbol = _get_yahoo_symbol(symbol)
-
-        log_data_fetch(f"Fetching {symbol} {timeframe} from Yahoo Finance (fallback)")
-
-        try:
-            # yfinance expects timezone-naive dates
-            start_naive = start_utc.replace(tzinfo=None) if start_utc.tzinfo else start_utc
-            end_naive = end_utc.replace(tzinfo=None) if end_utc.tzinfo else end_utc
-            
-            ticker = yf.Ticker(yf_symbol)
-            df = ticker.history(start=start_naive, end=end_naive, interval=yf_tf, auto_adjust=True)
-            
-            if df.empty:
-                logger.warning(f"No data from yfinance for {yf_symbol} {timeframe}")
-                log_warning(f"No data from Yahoo Finance for {symbol} {timeframe}")
-                return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-
-            # Standardize column names and format
-            df = df.rename(columns={
-                "Open": "open", "High": "high", "Low": "low", 
-                "Close": "close", "Volume": "tick_volume"
-            })
-            
-            # Ensure we have all required columns
-            for col in ['open', 'high', 'low', 'close']:
-                if col not in df.columns:
-                    logger.error(f"Missing column {col} in yfinance data")
-                    return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-            
-            if 'tick_volume' not in df.columns:
-                df['tick_volume'] = 0
-                
-            df = df[['open', 'high', 'low', 'close', 'tick_volume']]
-            
-            # FIXED: Ensure UTC timezone properly
-            if df.index.tz is None:
-                df.index = pd.to_datetime(df.index).tz_localize("UTC")
-            else:
-                df.index = pd.to_datetime(df.index).tz_convert("UTC")
-            
-            # Resample if needed (e.g., H1 to H4)
-            if timeframe.upper() == "H4":
-                df = df.resample("4H").agg({
-                    "open": "first",
-                    "high": "max", 
-                    "low": "min",
-                    "close": "last",
-                    "tick_volume": "sum"
-                }).dropna()
-            
-            logger.info(f"Fetched {len(df)} bars for {yf_symbol} {timeframe} from yfinance")
-            log_success(f"Fetched {len(df)} bars for {symbol} {timeframe} from Yahoo Finance")
-            return df
-            
-        except Exception as e:
-            logger.error(f"yfinance fetch failed for {yf_symbol} {timeframe}: {e}")
-            return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+    # Yahoo Finance fetch removed — MT5-only
 
     def _load_from_cache(self, cache_path: str, start_utc: datetime, end_utc: datetime) -> Optional[pd.DataFrame]:
         """FIXED: Load data from cache with improved validation"""
@@ -845,10 +764,9 @@ class DataManager:
         timeframe: str,
         lookback_days: int = 30,
         end_utc: Optional[datetime] = None,
-        use_yahoo_fallback: bool = True,
     ) -> pd.DataFrame:
         """
-        FIXED: Public method to fetch OHLCV for a single timeframe with enhanced fallback logic.
+        FIXED: Public method to fetch OHLCV for a single timeframe (MT5-only).
         """
         # FIXED: Ensure end_utc is timezone-aware
         if end_utc is None:
@@ -871,7 +789,7 @@ class DataManager:
 
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
-        # Try MT5 first if enabled and connected
+        # Try MT5 if enabled and connected
         if self.use_mt5 and self._connected:
             try:
                 logger.info(f"Fetching {symbol} {timeframe} from MT5...")
@@ -880,24 +798,8 @@ class DataManager:
                     logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
             except Exception as e:
                 logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
-                logger.info(f"Will attempt Yahoo Finance fallback...")
         elif self.use_mt5 and not self._connected:
             logger.warning(f"MT5 not connected - skipping MT5 data fetch. Call connect() first.")
-
-        # Fallback to yfinance if allowed and needed
-        if (df.empty or df is None) and use_yahoo_fallback:
-            if not YFINANCE_AVAILABLE:
-                logger.warning(f"Yahoo Finance not available (yfinance not installed)")
-            else:
-                logger.info(f"📊 Attempting Yahoo Finance fallback for {symbol} {timeframe}...")
-                try:
-                    df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
-                    if not df.empty:
-                        logger.info(f"✅ Successfully fetched {len(df)} bars from Yahoo Finance")
-                    else:
-                        logger.warning(f"Yahoo Finance returned empty data for {symbol}")
-                except Exception as e:
-                    logger.error(f"yfinance fallback failed for {symbol}: {e}")
 
         # FIXED: Final fallback - create synthetic data only if allowed
         if df.empty:
@@ -910,7 +812,6 @@ class DataManager:
                 logger.error(
                     f"❌ All data sources failed for {symbol} {timeframe}:"
                     f"\n  - MT5: {'Not available' if not self.use_mt5 else ('Not connected' if not self._connected else 'Failed')}"
-                    f"\n  - Yahoo Finance: {'Not available' if not YFINANCE_AVAILABLE else 'Failed'}"
                     f"\n  - Synthetic data: Disabled (ALLOW_SYNTHETIC_DATA={allow_synth_env})"
                 )
             
@@ -1013,7 +914,6 @@ class DataManager:
         symbol: str,
         timeframes: Optional[List[str]] = None,
         lookback_days: int = 60,
-        use_yahoo_fallback: bool = True,
     ) -> Dict[str, pd.DataFrame]:
         """
         FIXED: Main convenience method with enhanced error handling per symbol.
@@ -1033,10 +933,9 @@ class DataManager:
             try:
                 logger.info(f"Fetching {symbol} {tf} (last {lookback_days} days)")
                 df = self.fetch_ohlcv_for_timeframe(
-                    symbol, tf, 
-                    lookback_days=lookback_days, 
+                    symbol, tf,
+                    lookback_days=lookback_days,
                     end_utc=end_utc,
-                    use_yahoo_fallback=use_yahoo_fallback
                 )
                 
                 if not df.empty:
@@ -1057,14 +956,14 @@ class DataManager:
     def get_available_symbols(self) -> List[str]:
         """Get list of available symbols from MT5"""
         if not self.use_mt5 or not self._connected:
-            return list(SYMBOL_MAPPING.keys())
+            return list(DEFAULT_SYMBOLS)
             
         try:
             symbols = mt5.symbols_get()
             return [s.name for s in symbols] if symbols else []
         except Exception as e:
             logger.error(f"Failed to get MT5 symbols: {e}")
-            return list(SYMBOL_MAPPING.keys())
+            return list(DEFAULT_SYMBOLS)
 
 
 # ----------------------------
@@ -1088,7 +987,7 @@ if __name__ == "__main__":
                     symbol, 
                     timeframes=["D1", "H4"], 
                     lookback_days=90,
-                    use_yahoo_fallback=True
+                    
                 )
                 
                 for tf, df in data.items():

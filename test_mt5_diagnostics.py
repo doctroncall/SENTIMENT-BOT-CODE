@@ -228,7 +228,7 @@ def main():
     print("=" * 60)
     
     if not results.get('platform'):
-        print("❌ MT5 only works on Windows. Use Yahoo Finance as fallback.")
+        print("❌ MT5 only works on Windows.")
     elif not results.get('module'):
         print("❌ Install MT5 module: pip install MetaTrader5")
     elif not results.get('terminal'):
