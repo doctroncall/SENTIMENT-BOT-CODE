@@ -160,46 +160,46 @@ def _mt5_df_from_rates(rates) -> pd.DataFrame:
     Optionally includes extended data (real_volume, spread) if available.
     """
     if rates is None or len(rates) == 0:
-        return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
+        logger.warning("No rates data provided to _mt5_df_from_rates")
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
     
     df = pd.DataFrame(list(rates))
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-        
-        # Handle different column name variations
-        column_mapping = {
-            "time": "time",
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "tick_volume": "tick_volume",
-        }
-        
-        # Rename columns if they exist
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        
-        # Ensure we have the required core columns
-        available_cols = [col for col in COLUMNS if col in df.columns]
-        if not available_cols:
-            logger.error("No valid columns found in MT5 data")
-            return pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-        
-        # ENHANCED: Optionally add extended data if available and enabled
-        if FETCH_EXTENDED_DATA:
-            # Add real_volume if available (actual traded volume)
-            if "real_volume" in df.columns:
-                available_cols.append("real_volume")
-                logger.debug("Including real_volume data")
-            
-            # Add spread if available (bid/ask spread in points)
-            if "spread" in df.columns:
-                available_cols.append("spread")
-                logger.debug("Including spread data")
-        
-        # Select only available columns and set time index
-        df = df[available_cols]
-        df = df.set_index("time")
+    
+    # Debug: log available columns
+    logger.debug(f"MT5 data columns: {df.columns.tolist()}")
+    
+    if "time" not in df.columns:
+        logger.error("MT5 data missing 'time' column")
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
+    
+    # Convert time to datetime with UTC timezone
+    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+    
+    # Build list of columns to keep (excluding 'time' which will be the index)
+    cols_to_keep = []
+    
+    # Core OHLCV columns (required)
+    for col in ['open', 'high', 'low', 'close', 'tick_volume']:
+        if col in df.columns:
+            cols_to_keep.append(col)
+        else:
+            logger.error(f"Missing required column: {col}")
+            return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'tick_volume']).set_index(pd.DatetimeIndex([], tz='UTC', name='time'))
+    
+    # Optional extended columns
+    if FETCH_EXTENDED_DATA:
+        if "real_volume" in df.columns:
+            cols_to_keep.append("real_volume")
+            logger.debug("Including real_volume data")
+        if "spread" in df.columns:
+            cols_to_keep.append("spread")
+            logger.debug("Including spread data")
+    
+    # Set time as index and select only relevant columns
+    df = df.set_index("time")
+    df = df[cols_to_keep]
+    
+    logger.debug(f"Processed DataFrame shape: {df.shape}, columns: {df.columns.tolist()}")
     
     return df
 

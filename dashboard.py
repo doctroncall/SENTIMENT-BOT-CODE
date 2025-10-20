@@ -168,6 +168,21 @@ class Dashboard:
                 log_warning(f"No daily data for {symbol}")
                 return None
             
+            # FIXED: Validate DataFrame has required columns
+            print(f"   DataFrame shape: {df_daily.shape}")
+            print(f"   DataFrame columns: {df_daily.columns.tolist()}")
+            print(f"   DataFrame index name: {df_daily.index.name}")
+            
+            required_cols = ['open', 'high', 'low', 'close']
+            missing_cols = [col for col in required_cols if col not in df_daily.columns]
+            if missing_cols:
+                print(f"❌ Missing required columns: {missing_cols}")
+                print(f"   Available columns: {df_daily.columns.tolist()}")
+                log_error(f"Missing columns in {symbol} data: {missing_cols}")
+                return None
+            
+            print(f"   ✅ All required columns present")
+            
             # FIXED: Validate sufficient data
             if len(df_daily) < 200:
                 print(f"⚠️ Insufficient data for {symbol} ({len(df_daily)} bars < 200 required)")
@@ -208,9 +223,46 @@ class Dashboard:
     # ------------------------------------------
     # 2️⃣ FIXED: Add Technical Indicators with Validation
     # ------------------------------------------
+    def _validate_dataframe_structure(self, df: pd.DataFrame, symbol: str) -> bool:
+        """Validate that DataFrame has the required structure for analysis"""
+        if df is None or df.empty:
+            print(f"   ❌ DataFrame is None or empty")
+            return False
+        
+        required_cols = ['open', 'high', 'low', 'close']
+        missing = [col for col in required_cols if col not in df.columns]
+        
+        if missing:
+            print(f"   ❌ DataFrame missing required columns: {missing}")
+            print(f"   Available columns: {df.columns.tolist()}")
+            return False
+        
+        # Check for sufficient data
+        if len(df) == 0:
+            print(f"   ❌ DataFrame has no rows")
+            return False
+        
+        # Check for valid data types
+        for col in required_cols:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                print(f"   ❌ Column {col} is not numeric: {df[col].dtype}")
+                return False
+        
+        return True
+    
     def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """FIXED: Add EMA, RSI, MACD with proper error handling"""
         df = df.copy()
+        
+        # Validate input DataFrame
+        if not self._validate_dataframe_structure(df, "indicator calculation"):
+            print(f"   ❌ Invalid DataFrame structure, cannot calculate indicators")
+            # Return DataFrame with default indicator values
+            df["EMA_200"] = df["close"].mean() if "close" in df.columns else 0
+            df["RSI"] = 50
+            df["MACD"] = 0
+            df["MACD_Signal"] = 0
+            return df
         
         try:
             # EMA 200
@@ -248,8 +300,13 @@ class Dashboard:
             
         except Exception as e:
             print(f"   ❌ Error calculating indicators: {e}")
+            import traceback
+            traceback.print_exc()
             # Set default values on error
-            df["EMA_200"] = df["close"].mean()
+            if "close" in df.columns:
+                df["EMA_200"] = df["close"].mean()
+            else:
+                df["EMA_200"] = 0
             df["RSI"] = 50
             df["MACD"] = 0
             df["MACD_Signal"] = 0
