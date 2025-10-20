@@ -1,11 +1,21 @@
-# verifier.py - FIXED VERSION
+# verifier.py - FIXED VERSION with MT5 Connector Integration
 import pandas as pd
 import datetime
 import time
 import os
 from typing import Optional, Tuple
 
-# Optional MT5 import with fallback
+# Import production-grade MT5 connector
+try:
+    from mt5_connector import MT5Connector, MT5Config, normalize_symbol as mt5_normalize_symbol
+    MT5_CONNECTOR_AVAILABLE = True
+except ImportError:
+    MT5Connector = None
+    MT5Config = None
+    mt5_normalize_symbol = None
+    MT5_CONNECTOR_AVAILABLE = False
+
+# Optional MT5 import with fallback (for legacy support)
 try:
     import MetaTrader5 as mt5
     MT5_AVAILABLE = True
@@ -22,16 +32,26 @@ class Verifier:
         self.mt5_login = int(mt5_login if mt5_login is not None else (_os.getenv("MT5_LOGIN", "0") or 0))
         self.mt5_password = mt5_password if mt5_password is not None else _os.getenv("MT5_PASSWORD", "")
         self.mt5_server = mt5_server if mt5_server is not None else _os.getenv("MT5_SERVER", "")
+        self.mt5_path = _os.getenv("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
         self._initialized = False
+        
+        # Use production-grade MT5 connector if available
+        self._use_connector = MT5_CONNECTOR_AVAILABLE
+        self._mt5_connector: Optional[MT5Connector] = None
         
     def _init_mt5(self) -> bool:
         """Initialize MT5 connection with error handling"""
+        if self._initialized:
+            return True
+        
+        # Use production-grade connector if available
+        if self._use_connector:
+            return self._init_mt5_with_connector()
+        
+        # Legacy initialization
         if not MT5_AVAILABLE:
             print("❌ MT5 not available for verification")
             return False
-            
-        if self._initialized:
-            return True
             
         try:
             if not mt5.initialize():
@@ -44,11 +64,38 @@ class Verifier:
                 return False
                 
             self._initialized = True
-            print("✅ MT5 connected for verification.")
+            print("✅ MT5 connected for verification (legacy method).")
             return True
             
         except Exception as e:
             print(f"❌ MT5 connection error: {e}")
+            return False
+    
+    def _init_mt5_with_connector(self) -> bool:
+        """Initialize MT5 connection using production-grade connector"""
+        try:
+            # Get or create connector instance
+            if self._mt5_connector is None:
+                config = MT5Config(
+                    login=self.mt5_login,
+                    password=self.mt5_password,
+                    server=self.mt5_server,
+                    path=self.mt5_path
+                )
+                self._mt5_connector = MT5Connector.get_instance(config)
+            
+            # Connect if not already connected
+            if not self._mt5_connector.is_connected():
+                if not self._mt5_connector.connect():
+                    print("❌ MT5 connection failed (via connector)")
+                    return False
+            
+            self._initialized = True
+            print("✅ MT5 connected for verification (via production connector).")
+            return True
+            
+        except Exception as e:
+            print(f"❌ MT5 connector error: {e}")
             return False
 
     # ------------------------------------------
@@ -119,7 +166,17 @@ class Verifier:
             symbol = self._normalize_symbol(symbol)
             
             # Fetch daily candles
-            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_D1, utc_from_timestamp, utc_to_timestamp)
+            if self._use_connector and self._mt5_connector is not None:
+                # Use connector to fetch rates
+                rates = self._mt5_connector.get_rates(
+                    symbol=symbol,
+                    timeframe=mt5.TIMEFRAME_D1 if MT5_AVAILABLE else 1440,
+                    date_from=utc_from_timestamp,
+                    date_to=utc_to_timestamp
+                )
+            else:
+                # Legacy method
+                rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_D1, utc_from_timestamp, utc_to_timestamp)
             
             if rates is None or len(rates) < 2:
                 print(f"⚠️ Not enough data for {symbol} on {date} (got {len(rates) if rates else 0} candles)")
@@ -134,6 +191,11 @@ class Verifier:
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normalize symbol name for consistent handling"""
+        # Use connector's normalization if available
+        if self._use_connector and mt5_normalize_symbol is not None:
+            return mt5_normalize_symbol(symbol)
+        
+        # Legacy normalization
         return symbol.upper().replace("/", "").replace("_", "").strip()
 
     # ------------------------------------------

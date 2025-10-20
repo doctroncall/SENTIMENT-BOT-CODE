@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-MT5 Connection Diagnostics Tool
-================================
+MT5 Connection Diagnostics Tool (with MT5 Connector Integration)
+=================================================================
 This script helps diagnose MT5 connection issues.
+Now uses the production-grade MT5 connector when available.
 
 Usage: python test_mt5_diagnostics.py
 """
@@ -10,6 +11,16 @@ Usage: python test_mt5_diagnostics.py
 import sys
 import os
 import platform
+
+# Try to import production-grade MT5 connector
+try:
+    from mt5_connector import MT5Connector, MT5Config, ConnectionState
+    MT5_CONNECTOR_AVAILABLE = True
+except ImportError:
+    MT5Connector = None
+    MT5Config = None
+    ConnectionState = None
+    MT5_CONNECTOR_AVAILABLE = False
 
 def print_section(title):
     """Print a section header"""
@@ -116,9 +127,88 @@ def check_credentials():
     
     return True
 
+def test_connection_with_connector():
+    """Test MT5 connection using production-grade connector"""
+    print_section("MT5 Connection Test (Using Production Connector)")
+    
+    if not MT5_CONNECTOR_AVAILABLE:
+        print("⏭️  Connector not available, falling back to legacy test")
+        return None
+    
+    try:
+        print("Step 1: Creating MT5 connector instance...")
+        config = MT5Config(
+            login=int(os.getenv("MT5_LOGIN", "211744072")),
+            password=os.getenv("MT5_PASSWORD", "dFbKaNLWQ53@9@Z"),
+            server=os.getenv("MT5_SERVER", "ExnessKE-MT5Trial9"),
+            path=os.getenv("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+        )
+        
+        connector = MT5Connector.get_instance(config)
+        print("✅ Connector instance created")
+        
+        # Attempt connection
+        print("\nStep 2: Connecting to MT5...")
+        if connector.connect():
+            print("✅ Connected successfully!")
+            
+            # Get account info
+            print("\nStep 3: Retrieving account information...")
+            account_info = connector.get_account_info()
+            if account_info:
+                print(f"📊 Account Information:")
+                print(f"   Account: {account_info.login}")
+                print(f"   Server: {account_info.server}")
+                print(f"   Balance: {account_info.balance}")
+                print(f"   Leverage: 1:{account_info.leverage}")
+            
+            # Get connection stats
+            print("\nStep 4: Connection statistics...")
+            stats = connector.get_connection_stats()
+            print(f"   State: {stats['state']}")
+            print(f"   Uptime: {stats.get('uptime_seconds', 0):.1f}s")
+            print(f"   Health Check: {stats.get('last_health_check', 'N/A')}")
+            
+            # Test symbol retrieval
+            print("\nStep 5: Testing symbol retrieval...")
+            symbols = connector.get_available_symbols()
+            print(f"✅ Found {len(symbols)} symbols")
+            if len(symbols) > 0:
+                print(f"   Sample symbols: {', '.join(symbols[:5])}")
+            
+            # Disconnect
+            print("\nStep 6: Disconnecting...")
+            connector.disconnect()
+            print("✅ Disconnected successfully")
+            
+            print("\n✅ Connection test PASSED (via production connector)!")
+            print("   Your MT5 connection is working correctly with the connector.")
+            return True
+        else:
+            print("❌ Connection failed")
+            print("\nPossible causes:")
+            print("  1. MT5 terminal is not running")
+            print("  2. MT5 terminal is not logged in")
+            print("  3. Wrong credentials")
+            print("  4. Network issues")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Connector error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def test_connection(mt5):
-    """Test actual MT5 connection"""
-    print_section("MT5 Connection Test")
+    """Test actual MT5 connection (legacy method)"""
+    # First try with production connector if available
+    if MT5_CONNECTOR_AVAILABLE:
+        result = test_connection_with_connector()
+        if result is not None:
+            return result
+    
+    # Fallback to legacy test
+    print_section("MT5 Connection Test (Legacy Method)")
     
     if mt5 is None:
         print("⏭️  Skipping (MT5 module not available)")
@@ -180,7 +270,7 @@ def test_connection(mt5):
         
         # Cleanup
         mt5.shutdown()
-        print("\n✅ Connection test PASSED!")
+        print("\n✅ Connection test PASSED (legacy method)!")
         print("   Your MT5 connection is working correctly.")
         return True
         
@@ -218,6 +308,7 @@ def main():
     print_section("DIAGNOSTIC SUMMARY")
     print(f"Platform Compatible: {'✅' if results.get('platform') else '❌'}")
     print(f"MT5 Module Installed: {'✅' if results.get('module') else '❌'}")
+    print(f"MT5 Connector Available: {'✅' if MT5_CONNECTOR_AVAILABLE else '❌'}")
     print(f"MT5 Terminal Running: {'✅' if results.get('terminal') else '⚠️ Unknown' if results.get('terminal') is None else '❌'}")
     print(f"MT5 Path Exists: {'✅' if results.get('path') else '❌'}")
     print(f"Connection Works: {'✅' if results.get('connection') else '❌'}")
