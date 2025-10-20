@@ -478,7 +478,10 @@ class DataManager:
         # Try MT5 first if enabled
         if self.use_mt5:
             if not self._connected:
-                self.connect()
+                logger.info(f"MT5 not connected, attempting to connect...")
+                connected = self.connect()
+                if not connected:
+                    logger.warning(f"Failed to connect to MT5, will try fallback sources")
                 
             if self._connected:
                 try:
@@ -488,33 +491,38 @@ class DataManager:
                         logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
                 except Exception as e:
                     logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
+                    logger.info(f"Will attempt Yahoo Finance fallback...")
+            else:
+                logger.warning(f"MT5 not connected, skipping MT5 data fetch")
 
-        # Fallback to yfinance if allowed and needed
         # Fallback to yfinance if allowed and needed
         if (df.empty or df is None) and use_yahoo_fallback:
             if not YFINANCE_AVAILABLE:
                 logger.warning(f"Yahoo Finance not available (yfinance not installed)")
             else:
                 logger.info(f"📊 Attempting Yahoo Finance fallback for {symbol} {timeframe}...")
-            try:
-                df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
+                try:
+                    df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
                     if not df.empty:
                         logger.info(f"✅ Successfully fetched {len(df)} bars from Yahoo Finance")
                     else:
                         logger.warning(f"Yahoo Finance returned empty data for {symbol}")
-            except Exception as e:
-                logger.error(f"yfinance fallback failed for {symbol}: {e}")
+                except Exception as e:
+                    logger.error(f"yfinance fallback failed for {symbol}: {e}")
 
         # FIXED: Final fallback - create synthetic data only if allowed
         if df.empty:
             allow_synth_env = os.getenv("ALLOW_SYNTHETIC_DATA", "1").strip().lower()
             allow_synth = allow_synth_env in ("1", "true", "yes", "on")
             if allow_synth:
-                logger.warning(f"All data sources failed for {symbol}. Creating synthetic data for testing.")
+                logger.warning(f"⚠️ All data sources failed for {symbol}. Creating synthetic data for testing.")
                 df = self._create_synthetic_data(start_utc, end_utc, timeframe)
             else:
                 logger.error(
-                    "All data sources failed and synthetic data is disabled (ALLOW_SYNTHETIC_DATA=0)."
+                    f"❌ All data sources failed for {symbol} {timeframe}:"
+                    f"\n  - MT5: {'Not available' if not self.use_mt5 else ('Not connected' if not self._connected else 'Failed')}"
+                    f"\n  - Yahoo Finance: {'Not available' if not YFINANCE_AVAILABLE else 'Failed'}"
+                    f"\n  - Synthetic data: Disabled (ALLOW_SYNTHETIC_DATA={allow_synth_env})"
                 )
             
         # FIXED: Clean and validate data
