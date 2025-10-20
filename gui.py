@@ -218,12 +218,16 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
         if mt5_status['enabled'] and not mt5_status['connected']:
             if st.button("🔌 Connect MT5", width='stretch', type="primary"):
                 with st.spinner("Connecting to MT5..."):
-                    success = dashboard.data_manager.connect()
+                    try:
+                        success = dashboard.data_manager.connect()
+                    except Exception as e:
+                        st.error(f"❌ Connection error: {str(e)}")
+                        success = False
                 if success:
                     st.success("✅ Connected!")
                     st.rerun()
                 else:
-                    st.error("❌ Connection failed")
+                    st.error("❌ Connection failed - Check troubleshooting below")
     
     with col3:
         if mt5_status['connected']:
@@ -242,6 +246,39 @@ def render_mt5_connection_card(dashboard: Dashboard) -> None:
             with col_b:
                 st.text(f"Enabled: {'Yes' if mt5_status['enabled'] else 'No'}")
                 st.text(f"Status: {'Connected' if mt5_status['connected'] else 'Disconnected'}")
+        
+        # Troubleshooting section - only show if not connected
+        if not mt5_status['connected']:
+            with st.expander("🔧 Troubleshooting - Connection Issues", expanded=False):
+                st.markdown("""
+                **If connection gets stuck or fails:**
+                
+                1. **Check MT5 Terminal is Running**
+                   - Open MetaTrader 5 desktop application
+                   - Make sure you're logged in
+                   
+                2. **Verify Credentials**
+                   - Login: {login}
+                   - Server: {server}
+                   - Check these match your MT5 terminal
+                   
+                3. **Restart MT5 Terminal**
+                   - Close MetaTrader 5 completely
+                   - Wait 5 seconds
+                   - Reopen and login
+                   - Try connecting again
+                   
+                4. **Check Terminal Path**
+                   - Default: `C:\\Program Files\\MetaTrader 5\\terminal64.exe`
+                   - Set MT5_PATH environment variable if different
+                   
+                5. **Enable Algo Trading**
+                   - In MT5: Tools → Options → Expert Advisors
+                   - Check "Allow automated trading"
+                   - Check "Allow DLL imports"
+                """.format(login=mt5_status['login'], server=mt5_status['server']))
+                
+                st.info("💡 **Tip:** Most connection issues are fixed by restarting MT5 terminal")
 
 
 def render_system_metrics(dashboard: Dashboard) -> None:
