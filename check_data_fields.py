@@ -22,7 +22,7 @@ def check_data_fields():
     # Try to fetch a small amount of data
     print("Fetching sample data for GBPUSD H1...")
     try:
-        df = dm.fetch_ohlcv_for_timeframe("GBPUSD", "H1", lookback_days=2, use_yahoo_fallback=False)
+        df = dm.fetch_ohlcv_for_timeframe("GBPUSD", "H1", lookback_days=2)
         
         if df.empty:
             print("❌ No data returned")

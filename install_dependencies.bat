@@ -66,9 +66,6 @@ if exist "requirements.txt" (
     echo Installing MetaTrader5...
     python -m pip install MetaTrader5
     
-    echo Installing yfinance (optional - for fallback data)...
-    python -m pip install yfinance
-    
     echo Installing reportlab (optional - for PDF reports)...
     python -m pip install reportlab
     

@@ -14,8 +14,7 @@ MetaTrader5>=5.0.0; sys_platform == 'win32'
 # Process monitoring for MT5 connection diagnostics (optional but recommended)
 psutil>=5.9.0
 
-# Alternative Data Source (optional)
-yfinance>=0.2.0
+# MT5-only; Yahoo Finance removed
 
 # PDF Report Generation (optional)
 reportlab>=4.0.0

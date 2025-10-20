@@ -529,7 +529,7 @@ def main() -> None:
             allow_synth = st.toggle(
                 "Allow synthetic fallback",
                 value=True,
-                help="Use synthetic data when both MT5 and Yahoo Finance fail"
+                help="Use synthetic data when MT5 fails"
             )
             
             show_logs = st.toggle(

@@ -90,7 +90,7 @@ if %errorlevel% neq 0 (
     where python
     echo.
     echo Installed Packages:
-    python -m pip list | findstr /i "pandas numpy openpyxl MetaTrader5 reportlab yfinance"
+    python -m pip list | findstr /i "pandas numpy openpyxl MetaTrader5 reportlab"
 )
 echo.
 echo Current Directory:
