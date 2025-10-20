@@ -586,16 +586,14 @@ def main() -> None:
     st.markdown("---")
     
     # ============================================================
-    # TABBED INTERFACE
+    # TABBED INTERFACE - 5 TABS AS REQUESTED
     # ============================================================
-    tab_home, tab_status, tab_analyze, tab_verify, tab_reports, tab_health, tab_help = st.tabs([
+    tab_home, tab_analysis, tab_health, tab_retrain, tab_status = st.tabs([
         "🏠 Home",
-        "📊 Status Monitor",
-        "📈 Analysis",
-        "✅ Verification",
-        "📄 Reports",
+        "📊 Analysis", 
         "🏥 Health",
-        "❓ Help"
+        "🔄 Retrain",
+        "📡 Running Status"
     ])
     
     # -------------------- HOME TAB --------------------
