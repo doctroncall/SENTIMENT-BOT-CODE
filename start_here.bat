@@ -16,13 +16,13 @@ echo [OK] Python found
 python --version
 echo.
 
-REM Check if GUI.py exists
-if not exist GUI.py (
-    echo [X] GUI.py not found in current directory!
+REM Check if gui.py exists
+if not exist gui.py (
+    echo [X] gui.py not found in current directory!
     pause
     exit /b 1
 )
-echo [OK] GUI.py found
+echo [OK] gui.py found
 echo.
 
 echo Checking dependencies...
@@ -42,7 +42,7 @@ echo To close the application, close the GUI window
 echo ----------------------------------------
 echo.
 
-REM Launch using streamlit instead of python directly
-streamlit run GUI.py
+REM Launch using streamlit (lowercase gui.py is the Streamlit version)
+streamlit run gui.py
 
 pause

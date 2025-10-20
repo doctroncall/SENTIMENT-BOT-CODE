@@ -88,6 +88,18 @@ class Dashboard:
         
         log_analysis(f"Starting full analysis cycle for {len(self.symbols)} symbols")
         
+        # CRITICAL FIX: Ensure MT5 connection before starting analysis
+        if self.data_manager.use_mt5 and not self.data_manager.is_connected():
+            print("\n📡 Connecting to MT5...")
+            log_analysis("Establishing MT5 connection")
+            connected = self.data_manager.connect()
+            if not connected:
+                error_msg = "Cannot proceed: MT5 connection failed and no fallback data source available"
+                print(f"\n❌ {error_msg}")
+                log_error("Analysis aborted", error_msg)
+                return []
+            print("✅ Connected to MT5\n")
+        
         results = []
         failed_symbols = []
         
