@@ -1,0 +1,40 @@
+# SMC Trading Bot Configuration
+
+# MT5 Connection Settings
+mt5:
+  # Leave empty to use current MT5 terminal without login
+  account: null
+  password: null
+  server: null
+  
+  # Or provide credentials for automatic login
+  # account: 12345678
+  # password: "your_password"
+  # server: "MetaQuotes-Demo"
+
+# Smart Money Concepts Settings
+smc:
+  swing_lookback: 10           # Number of candles to look back for swing points
+  fvg_min_gap: 0.0001         # Minimum gap size for Fair Value Gaps
+
+# Trading Settings
+trading:
+  symbols:                     # Symbols to trade
+    - "EURUSD"
+    - "GBPUSD"
+    - "USDJPY"
+    - "XAUUSD"
+  
+  timeframe: "H1"             # Trading timeframe: M1, M5, M15, M30, H1, H4, D1, W1
+  lot_size: 0.01              # Default lot size
+  max_positions: 3            # Maximum simultaneous positions
+  risk_percent: 1.0           # Risk per trade as % of account balance
+  risk_reward: 2.0            # Risk:Reward ratio (e.g., 2.0 = 1:2)
+  scan_interval: 300          # Seconds between market scans (300 = 5 minutes)
+
+# Logging Settings
+logging:
+  level: "INFO"               # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "logs/smc_bot.log"
+  max_bytes: 10485760         # 10MB
+  backup_count: 5

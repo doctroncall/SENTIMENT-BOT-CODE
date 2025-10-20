@@ -1,0 +1,49 @@
+╔════════════════════════════════════════════════════════════╗
+║          CURSOR SMC TRADING BOT - FILES READY             ║
+╔════════════════════════════════════════════════════════════╗
+
+📍 LOCATION: All files are now in YOUR CURRENT WORKSPACE ROOT
+
+✅ FILES YOU CAN NOW SEE:
+
+📂 Batch Files (Windows):
+   • install.bat             - Install dependencies
+   • start.bat               - Start the trading bot
+   • test_connection.bat     - Test MT5 connection
+
+📂 Python Files:
+   • main.py                 - Main entry point
+   • src/mt5_connector.py    - MT5 connection
+   • src/smc_analyzer.py     - SMC analysis
+   • src/trading_bot.py      - Trading logic
+   • src/config_manager.py   - Config management
+   • src/logger_setup.py     - Logging
+
+📂 Configuration:
+   • config_cursor_smc/config.yaml - All settings
+
+📂 Documentation:
+   • CURSOR_SMC_README.md    - Full instructions
+
+📂 Dependencies:
+   • requirements_cursor_smc.txt - Python packages
+
+═══════════════════════════════════════════════════════════
+
+🚀 TO START (3 STEPS):
+
+1️⃣  Double-click: install.bat
+2️⃣  Edit: config_cursor_smc/config.yaml (set your symbols)
+3️⃣  Double-click: start.bat
+
+That's it! Bot will start trading.
+
+═══════════════════════════════════════════════════════════
+
+📋 These files are in your WORKSPACE ROOT - the same place
+   where you see all your other files like dashboard.py,
+   gui.py, etc.
+
+   Just scroll through your file list and you'll see them!
+
+═══════════════════════════════════════════════════════════
