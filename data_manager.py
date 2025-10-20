@@ -386,13 +386,16 @@ class DataManager:
             return None
             
         try:
-            df_cache = pd.read_csv(cache_path, parse_dates=["time"])
+            # FIXED: Read CSV without parse_dates to handle missing column errors
+            df_cache = pd.read_csv(cache_path)
             
-            # FIXED: Handle timezone properly
+            # FIXED: Handle timezone properly and parse dates manually
             if 'time' not in df_cache.columns:
                 logger.warning(f"Cache file missing 'time' column: {cache_path}")
                 return None
             
+            # Parse time column manually
+            df_cache['time'] = pd.to_datetime(df_cache['time'])
             df_cache = df_cache.set_index('time')
             
             # Ensure timezone awareness
@@ -479,15 +482,26 @@ class DataManager:
                 
             if self._connected:
                 try:
+                    logger.info(f"Attempting to fetch {symbol} {timeframe} from MT5...")
                     df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully fetched {len(df)} bars from MT5")
                 except Exception as e:
                     logger.warning(f"MT5 fetch failed for {symbol} {timeframe}: {e}")
 
         # Fallback to yfinance if allowed and needed
-        if (df.empty or df is None) and use_yahoo_fallback and YFINANCE_AVAILABLE:
-            logger.info(f"Falling back to yfinance for {symbol} {timeframe}")
+        # Fallback to yfinance if allowed and needed
+        if (df.empty or df is None) and use_yahoo_fallback:
+            if not YFINANCE_AVAILABLE:
+                logger.warning(f"Yahoo Finance not available (yfinance not installed)")
+            else:
+                logger.info(f"📊 Attempting Yahoo Finance fallback for {symbol} {timeframe}...")
             try:
                 df = self._fetch_yfinance_ohlcv(symbol, timeframe, start_utc, end_utc)
+                    if not df.empty:
+                        logger.info(f"✅ Successfully fetched {len(df)} bars from Yahoo Finance")
+                    else:
+                        logger.warning(f"Yahoo Finance returned empty data for {symbol}")
             except Exception as e:
                 logger.error(f"yfinance fallback failed for {symbol}: {e}")
 
