@@ -67,21 +67,35 @@ connection_logger.setLevel(logging.DEBUG)
 LOGS_DIR = "logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# File handler for connection logs
+# File handler for connection logs with UTF-8 encoding
 connection_log_file = os.path.join(LOGS_DIR, f"mt5_connection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-file_handler = logging.FileHandler(connection_log_file)
+file_handler = logging.FileHandler(connection_log_file, encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
 connection_logger.addHandler(file_handler)
 
-# Also add console handler for connection logger
-console_handler = logging.StreamHandler()
+# Also add console handler for connection logger with UTF-8 encoding
+import sys
+console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+# Force UTF-8 encoding to handle Unicode characters on Windows
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    console_handler.stream.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, Exception):
+    # Fallback: wrap the stream with UTF-8 encoding
+    import codecs
+    if not isinstance(console_handler.stream, codecs.StreamReaderWriter):
+        console_handler.stream = codecs.getwriter('utf-8')(console_handler.stream.buffer, errors='replace')
 connection_logger.addHandler(console_handler)
 
 logger.info(f"Connection logging enabled: {connection_log_file}")
-print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+try:
+    print(f"\n📝 Connection logs will be written to: {connection_log_file}\n")
+except UnicodeEncodeError:
+    print(f"\n[LOG] Connection logs will be written to: {connection_log_file}\n")
 
 # Status monitoring
 try:
@@ -288,7 +302,7 @@ class DataManager:
             logger.info("MT5 usage disabled or MetaTrader5 module missing.")
             log_warning("MT5 usage disabled or module missing")
             return False
-        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
+        connection_logger.debug(f"[STEP 1] [OK] MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
 
         # Step 2: Check if MT5 module is available
         connection_logger.debug(f"[STEP 2] Checking MT5 module availability: MT5_AVAILABLE={MT5_AVAILABLE}, mt5={mt5}")
@@ -297,7 +311,7 @@ class DataManager:
             logger.error("MT5 module not available - cannot connect")
             log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
             return False
-        connection_logger.debug(f"[STEP 2] ✓ MT5 module is available (elapsed: {time_module.time()-start_time:.3f}s)")
+        connection_logger.debug(f"[STEP 2] [OK] MT5 module is available (elapsed: {time_module.time()-start_time:.3f}s)")
 
         # Step 3: Check if already connected
         connection_logger.debug(f"[STEP 3] Checking existing connection status: _connected={self._connected}")
@@ -305,7 +319,7 @@ class DataManager:
             connection_logger.info("[STEP 3] Already connected to MT5")
             log_connection("Already connected to MT5")
             return True
-        connection_logger.debug(f"[STEP 3] ✓ Not currently connected, proceeding (elapsed: {time_module.time()-start_time:.3f}s)")
+        connection_logger.debug(f"[STEP 3] [OK] Not currently connected, proceeding (elapsed: {time_module.time()-start_time:.3f}s)")
         
         log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
 
@@ -342,7 +356,7 @@ class DataManager:
                 self._connected = False
                 return False
             
-            connection_logger.info(f"[STEP 4] ✓ MT5 initialized successfully (elapsed: {time_module.time()-start_time:.3f}s)")
+            connection_logger.info(f"[STEP 4] [OK] MT5 initialized successfully (elapsed: {time_module.time()-start_time:.3f}s)")
                 
         except Exception as e:
             connection_logger.exception(f"[STEP 4] EXCEPTION during MT5 initialization: {e}")
@@ -388,7 +402,7 @@ class DataManager:
                     connection_logger.error(f"[STEP 5] Error during shutdown: {shutdown_err}")
                 return False
             
-            connection_logger.info(f"[STEP 5] ✓ MT5 login successful (elapsed: {time_module.time()-start_time:.3f}s)")
+            connection_logger.info(f"[STEP 5] [OK] MT5 login successful (elapsed: {time_module.time()-start_time:.3f}s)")
                 
         except Exception as e:
             connection_logger.exception(f"[STEP 5] EXCEPTION during MT5 login: {e}")
