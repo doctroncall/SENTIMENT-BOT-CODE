@@ -156,7 +156,6 @@ class OrderBlockDetector:
     def detect(self, df: pd.DataFrame, timeframe: str) -> List[OrderBlock]:
         """Detect order blocks in the given data"""
         if len(df) < 5:
-            self.logger.warning(f"Insufficient data for OB detection: {len(df)} bars")
             return []
         
         order_blocks = []
@@ -175,7 +174,6 @@ class OrderBlockDetector:
                         strength=strength
                     )
                     order_blocks.append(ob)
-                    self.logger.debug(f"Bullish OB detected at {df.index[i]} (strength={strength:.0f})")
             
             # Bearish Order Block
             if self._is_bearish_ob(df, i):
@@ -190,9 +188,7 @@ class OrderBlockDetector:
                         strength=strength
                     )
                     order_blocks.append(ob)
-                    self.logger.debug(f"Bearish OB detected at {df.index[i]} (strength={strength:.0f})")
         
-        self.logger.info(f"Detected {len(order_blocks)} order blocks on {timeframe}")
         return order_blocks
     
     def _is_bullish_ob(self, df: pd.DataFrame, i: int) -> bool:
@@ -287,7 +283,6 @@ class MarketStructureAnalyzer:
     def analyze(self, df: pd.DataFrame, timeframe: str) -> MarketStructure:
         """Analyze market structure"""
         if len(df) < self.swing_lookback * 3:
-            self.logger.warning(f"Insufficient data for structure analysis: {len(df)} bars")
             return MarketStructure(
                 timeframe=timeframe,
                 trend='NEUTRAL',
@@ -313,7 +308,6 @@ class MarketStructureAnalyzer:
             structure_strength=strength
         )
         
-        self.logger.info(f"Market structure on {timeframe}: {trend} (strength={strength:.0f})")
         return structure
     
     def _find_swing_highs(self, df: pd.DataFrame) -> List[float]:
@@ -448,9 +442,8 @@ class BiasCalculator:
         self.logger = logging.getLogger(f"{__name__}.BiasCalculator")
     
     def calculate(self, signals: List[Signal]) -> Bias:
-        """Calculate final bias from signals"""
+        """Calculate final bias from signals (PRODUCTION - fast)"""
         if not signals:
-            self.logger.warning("No signals provided for bias calculation")
             return Bias.neutral()
         
         bullish_score = 0.0
@@ -518,11 +511,6 @@ class BiasCalculator:
             signals=signals
         )
         
-        self.logger.info(
-            f"Bias calculated: {direction.value} "
-            f"(confidence={confidence:.1f}%, level={confidence_level.value})"
-        )
-        
         return bias
     
     def _group_signals_by_type(self, signals: List[Signal]) -> Dict[str, List[Signal]]:
@@ -554,7 +542,7 @@ class SMCAnalyzer:
     
     def analyze(self, symbol: str, data: Dict[str, pd.DataFrame]) -> Bias:
         """
-        Analyze symbol using SMC concepts
+        Analyze symbol using SMC concepts (PRODUCTION - minimal logging)
         
         Args:
             symbol: Trading symbol (e.g., 'GBPUSD')
@@ -563,67 +551,40 @@ class SMCAnalyzer:
         Returns:
             Bias object with final trading direction and confidence
         """
-        self.logger.info(f"{'='*70}")
-        self.logger.info(f"Starting SMC analysis for {symbol}")
-        self.logger.info(f"{'='*70}")
-        
         try:
             # Validate input data
             if not self._validate_data(data):
-                self.logger.error("Data validation failed")
                 return Bias.neutral()
             
             # Collect signals from all timeframes
             all_signals = []
             
             for timeframe, df in data.items():
-                self.logger.info(f"\n📊 Analyzing {timeframe}...")
-                self.logger.info(f"{'-'*70}")
-                
                 try:
                     signals = self._analyze_timeframe(df, timeframe)
                     all_signals.extend(signals)
-                    self.logger.info(f"✅ {timeframe}: {len(signals)} signals generated")
                 except Exception as e:
-                    self.logger.error(f"❌ {timeframe} analysis failed: {e}")
-                    # Continue with other timeframes
+                    self.logger.debug(f"Error analyzing {timeframe}: {e}")
                     continue
             
             if not all_signals:
-                self.logger.error("No signals generated from any timeframe")
                 return Bias.neutral()
             
             # Calculate final bias
-            self.logger.info(f"\n{'='*70}")
-            self.logger.info(f"Calculating final bias from {len(all_signals)} signals...")
-            self.logger.info(f"{'='*70}")
-            
             bias = self.bias_calculator.calculate(all_signals)
             
             # Validate result
             if not self._validate_bias(bias, all_signals):
-                self.logger.warning("Bias validation failed - returning neutral")
                 return Bias.neutral()
-            
-            self.logger.info(f"\n{'='*70}")
-            self.logger.info(f"✅ SMC ANALYSIS COMPLETE")
-            self.logger.info(f"{'='*70}")
-            self.logger.info(f"Symbol: {symbol}")
-            self.logger.info(f"Bias: {bias.direction.value}")
-            self.logger.info(f"Confidence: {bias.confidence:.1f}%")
-            self.logger.info(f"Level: {bias.confidence_level.value}")
-            self.logger.info(f"Bullish Score: {bias.bullish_score:.1f}%")
-            self.logger.info(f"Bearish Score: {bias.bearish_score:.1f}%")
-            self.logger.info(f"{'='*70}\n")
             
             return bias
             
         except Exception as e:
-            self.logger.exception(f"Critical error in SMC analysis: {e}")
+            self.logger.error(f"SMC analysis error: {e}")
             return Bias.neutral()
     
     def _analyze_timeframe(self, df: pd.DataFrame, timeframe: str) -> List[Signal]:
-        """Analyze single timeframe and generate signals"""
+        """Analyze single timeframe and generate signals (PRODUCTION - fast)"""
         signals = []
         
         # 1. Order Blocks
@@ -639,9 +600,8 @@ class SMCAnalyzer:
                     details={'order_block': ob.to_dict()}
                 )
                 signals.append(signal)
-            self.logger.info(f"  Order Blocks: {len(obs)} detected")
         except Exception as e:
-            self.logger.error(f"  Order Block detection failed: {e}")
+            self.logger.debug(f"OB detection failed: {e}")
         
         # 2. Market Structure
         try:
@@ -656,11 +616,8 @@ class SMCAnalyzer:
                     details={'trend': structure.trend}
                 )
                 signals.append(signal)
-            self.logger.info(f"  Market Structure: {structure.trend} (strength={structure.structure_strength:.0f})")
         except Exception as e:
-            self.logger.error(f"  Market structure analysis failed: {e}")
-        
-        # Add more SMC concepts here (FVG, liquidity zones, etc.)
+            self.logger.debug(f"Structure analysis failed: {e}")
         
         return signals
     
