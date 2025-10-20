@@ -217,7 +217,8 @@ def _call_with_timeout(fn, timeout_seconds: float, *args, **kwargs) -> Tuple[boo
 
 def normalize_symbol(symbol: str) -> str:
     """
-    Normalize symbol name for consistency
+    DEPRECATED: Use symbol_utils.normalize_symbol() instead.
+    Kept for backward compatibility.
     
     Args:
         symbol: Raw symbol name
@@ -225,9 +226,15 @@ def normalize_symbol(symbol: str) -> str:
     Returns:
         Normalized symbol name (uppercase, no special chars)
     """
-    if not symbol:
-        return ""
-    return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+    # Import centralized version
+    try:
+        from symbol_utils import normalize_symbol as _normalize
+        return _normalize(symbol)
+    except ImportError:
+        # Fallback if symbol_utils not available
+        if not symbol:
+            return ""
+        return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
 
 
 # ============================================================================
@@ -298,11 +305,29 @@ class MT5Connector:
         
         Returns:
             MT5Connector singleton instance
+        
+        Note:
+            If instance already exists, config parameter is IGNORED.
+            All subsequent calls will return the same instance with the original config.
+            Use reset_instance() first if you need to create with different config.
         """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = cls(config)
+        else:
+            # Warn if trying to use different config
+            if config is not None:
+                existing_config = cls._instance.config
+                # Check if configs differ (basic check on key fields)
+                if (config.login != existing_config.login or 
+                    config.server != existing_config.server):
+                    cls._instance.logger.warning(
+                        f"MT5Connector singleton already exists with different config! "
+                        f"Existing: login={existing_config.login}, server={existing_config.server}. "
+                        f"Requested: login={config.login}, server={config.server}. "
+                        f"Using existing config. Call reset_instance() first if you need different config."
+                    )
         return cls._instance
     
     @classmethod

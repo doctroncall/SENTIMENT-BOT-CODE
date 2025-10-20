@@ -258,22 +258,10 @@ def _call_with_timeout(fn, *, timeout_seconds: float, args: Optional[tuple] = No
 
 
 # ----------------------------
-# FIXED: Centralized Utility Functions
+# FIXED: Import Centralized Utility Functions
 # ----------------------------
-def normalize_symbol(symbol: str) -> str:
-    """
-    FIXED: Centralized symbol normalization for consistency across the system
-    Uses MT5 connector's normalization if available, otherwise uses local implementation
-    """
-    if not symbol:
-        return ""
-    
-    # Use MT5 connector's normalization if available
-    if MT5_CONNECTOR_AVAILABLE and mt5_normalize_symbol is not None:
-        return mt5_normalize_symbol(symbol)
-    
-    # Fallback to local implementation
-    return symbol.upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+# Import centralized symbol normalization (single source of truth)
+from symbol_utils import normalize_symbol
 
 
 def safe_timestamp_conversion(dt: datetime) -> int:
@@ -392,196 +380,32 @@ class DataManager:
     # ----------------------------
     def connect(self) -> bool:
         """
-        Connect to MT5 with provided credentials.
-        Returns True if connected successfully.
-        Uses production-grade MT5Connector if available, otherwise falls back to legacy connection.
+        Connect to MT5 using production-grade MT5Connector.
+        
+        Returns:
+            True if connected successfully, False otherwise
         """
-        import time as time_module
-        start_time = time_module.time()
-
         # Validate prerequisites
         if not self.use_mt5:
             logger.info("MT5 usage disabled or MetaTrader5 module missing.")
             return False
 
-        if self._connected:
-            connection_logger.info("[STEP 3] Already connected to MT5")
+        # Check if already connected via singleton
+        if self._mt5_connector is not None and self._mt5_connector.is_connected():
+            connection_logger.info("Already connected via MT5Connector singleton")
+            self._connected = True
             log_connection("Already connected to MT5")
             return True
 
-        # Use production-grade MT5 connector if available
-        if self._use_connector:
-            return self._connect_with_connector()
-        
-        # Fallback to legacy connection method
-        if not MT5_AVAILABLE or mt5 is None:
-            connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
-            logger.error("MT5 module not available - cannot connect")
-            log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
-            return False
-
-        connection_logger.info("="*80)
-        connection_logger.info("CONNECTION ATTEMPT STARTED (Legacy Method)")
-        connection_logger.info("="*80)
-        connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
-        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
-        log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
-
-        # Step 4: Initialize MT5 with timeout and attach-first behavior
-        connection_logger.info(f"[STEP 4] Starting MT5 initialization...")
-        connection_logger.debug(f"[STEP 4] MT5 path: {self.mt5_path}")
-        connection_logger.debug(f"[STEP 4] Path exists: {os.path.exists(self.mt5_path) if self.mt5_path else 'N/A'}")
-
-        try:
-            init_start = time_module.time()
-
-            def _init_auto():
-                return mt5.initialize()
-
-            def _init_with_path():
-                return mt5.initialize(self.mt5_path)
-
-            initialized = False
-            tried_methods = []
-
-            def _try_init(callable_fn, label: str) -> bool:
-                nonlocal tried_methods
-                tried_methods.append(label)
-                connection_logger.debug(f"[STEP 4] >>> Attempt: {label} (timeout {MT5_INIT_TIMEOUT_MS}ms) <<<")
-                completed, result, err = _call_with_timeout(
-                    callable_fn,
-                    timeout_seconds=max(1, MT5_INIT_TIMEOUT_MS / 1000.0),
-                )
-                if not completed:
-                    connection_logger.error(f"[STEP 4] {label} timed out after {MT5_INIT_TIMEOUT_MS}ms")
-                    return False
-                if err:
-                    connection_logger.error(f"[STEP 4] {label} raised: {err}")
-                    return False
-                connection_logger.debug(f"[STEP 4] <<< {label} returned: {result} (took {time_module.time()-init_start:.3f}s) >>>")
-                return bool(result)
-
-            # Prefer attach-first (auto) to avoid launching terminal if already running
-            if MT5_ATTACH_FIRST:
-                initialized = _try_init(_init_auto, "mt5.initialize() attach-first")
-                if not initialized and self.mt5_path and os.path.exists(self.mt5_path):
-                    initialized = _try_init(_init_with_path, "mt5.initialize(path)")
-            else:
-                if self.mt5_path and os.path.exists(self.mt5_path):
-                    initialized = _try_init(_init_with_path, "mt5.initialize(path)")
-                if not initialized:
-                    initialized = _try_init(_init_auto, "mt5.initialize() attach-first")
-
-            connection_logger.info(f"[STEP 4] MT5 initialization result: {initialized} (attempts: {', '.join(tried_methods)})")
-
-            if not initialized:
-                error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
-                connection_logger.error(f"[STEP 4] MT5 initialization failed. last_error={error_info}")
-                error_msg = f"{error_info}" if error_info else "Unknown error"
-                logger.error(f"MT5 initialize failed: {error_msg}")
-                log_error(
-                    "MT5 initialization failed",
-                    f"{error_msg}\n\nTroubleshooting:\n1. Ensure MT5 is running and logged in\n2. Verify MT5_PATH if provided\n3. Close any modal dialogs in MT5 (e.g., update prompts)\n4. Try setting MT5_ATTACH_FIRST=0 to force path init",
-                )
-                self._connected = False
-                return False
-
-            connection_logger.info(f"[STEP 4] ✓ MT5 initialized successfully (elapsed: {time_module.time()-start_time:.3f}s)")
-
-        except Exception as e:
-            connection_logger.exception(f"[STEP 4] EXCEPTION during MT5 initialization: {e}")
-            logger.exception(f"Failed to initialize MT5 terminal: {e}")
-            log_error(
-                "MT5 terminal initialization exception",
-                f"{str(e)}\n\nThis usually means:\n1. MT5 terminal is not running\n2. MT5 path is incorrect\n3. MT5 needs to be restarted",
-            )
-            self._connected = False
-            return False
-
-        # Step 5: Login to MT5
-        connection_logger.info(f"[STEP 5] Starting MT5 login...")
-        connection_logger.debug(f"[STEP 5] Server: {self.mt5_server}")
-        connection_logger.debug(f"[STEP 5] Login: {self.mt5_login}")
-        connection_logger.debug(f"[STEP 5] Password: {'*' * len(self.mt5_password) if self.mt5_password else 'None'}")
-        
-        try:
-            login_start = time_module.time()
-            logger.info(f"Attempting login to {self.mt5_server} with account {self.mt5_login}")
-            connection_logger.debug(f"[STEP 5] >>> About to call mt5.login() with timeout {MT5_LOGIN_TIMEOUT_MS}ms <<<")
-
-            def _login_call():
-                return mt5.login(login=self.mt5_login, password=self.mt5_password, server=self.mt5_server)
-
-            completed, authorized, err = _call_with_timeout(
-                _login_call,
-                timeout_seconds=max(1, MT5_LOGIN_TIMEOUT_MS / 1000.0),
-            )
-            if not completed:
-                connection_logger.error(f"[STEP 5] mt5.login() timed out after {MT5_LOGIN_TIMEOUT_MS}ms")
-                authorized = False
-            if err:
-                connection_logger.error(f"[STEP 5] mt5.login() raised: {err}")
-                authorized = False
-
-            connection_logger.debug(f"[STEP 5] <<< mt5.login() returned: {authorized} (took {time_module.time()-login_start:.3f}s) >>>")
-            connection_logger.info(f"[STEP 5] MT5 login result: {authorized} (elapsed: {time_module.time()-start_time:.3f}s)")
-            
-            if not authorized:
-                error = mt5.last_error()
-                connection_logger.error(f"Login failed: {error}")
-                logger.error(f"MT5 login failed: {error}")
-                log_error("MT5 login failed",
-                         f"Error: {error}\n\nVerify:\n"
-                         f"• Account: {self.mt5_login}\n"
-                         f"• Server: {self.mt5_server}\n"
-                         "• Password is correct\n"
-                         "• Account is active and not expired")
-                
-                # Cleanup
-                try:
-                    mt5.shutdown()
-                except:
-                    pass
-                return False
-            
-            # Connection successful
-            self._connected = True
-            connection_logger.info("="*80)
-            connection_logger.info("CONNECTION SUCCESSFUL")
-            connection_logger.info(f"Server: {self.mt5_server} | Account: {self.mt5_login}")
-            connection_logger.info("="*80)
-            logger.info(f"Connected to MT5: {self.mt5_server} (account {self.mt5_login})")
-            log_success("Connected to MT5", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
-            return True
-            
-        except Exception as e:
-            connection_logger.exception(f"Connection exception: {e}")
-            logger.exception(f"MT5 connection failed: {e}")
-            log_error("MT5 connection exception",
-                     f"Unexpected error: {str(e)}\n\n"
-                     "This typically indicates:\n"
-                     "• MT5 terminal is not running\n"
-                     "• Installation issue with MetaTrader5 package\n"
-                     "• System compatibility problem")
-            self._connected = False
-            
-            # Cleanup
-            try:
-                mt5.shutdown()
-            except:
-                pass
-            return False
-
-    def _connect_with_connector(self) -> bool:
-        """
-        Connect using production-grade MT5Connector
-        
-        Returns:
-            True if connection successful, False otherwise
-        """
         try:
             # Create or get connector instance
             if self._mt5_connector is None:
+                if not MT5_CONNECTOR_AVAILABLE:
+                    logger.error("MT5Connector not available - cannot connect")
+                    log_error("MT5Connector not available", 
+                             "MT5Connector module is required. Check mt5_connector.py")
+                    return False
+                
                 config = MT5Config(
                     login=self.mt5_login,
                     password=self.mt5_password,
@@ -593,28 +417,32 @@ class DataManager:
             
             # Attempt connection
             connection_logger.info("="*80)
-            connection_logger.info("CONNECTION ATTEMPT STARTED (Production MT5Connector)")
+            connection_logger.info("CONNECTION ATTEMPT (Production MT5Connector)")
             connection_logger.info("="*80)
-            log_connection("Attempting to connect to MT5 (using connector)...", f"Server: {self.mt5_server}")
+            log_connection("Connecting to MT5...", f"Server: {self.mt5_server}")
             
             if self._mt5_connector.connect():
-                self._connected = True
+                # SYNC state with connector
+                self._connected = self._mt5_connector.is_connected()
                 logger.info("Successfully connected using MT5Connector")
-                log_success("Connected to MT5 via connector", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
+                log_success("Connected to MT5", f"Server: {self.mt5_server}, Account: {self.mt5_login}")
                 return True
             else:
                 logger.error("Failed to connect using MT5Connector")
-                log_error("MT5 connection failed", "Could not establish connection via MT5Connector")
+                log_error("MT5 connection failed", "Could not establish connection")
+                self._connected = False
                 return False
         
         except MT5NotAvailableError as e:
             logger.error(f"MT5 not available: {e}")
             log_error("MT5 not available", str(e))
+            self._connected = False
             return False
         
         except Exception as e:
             logger.exception(f"Error connecting with MT5Connector: {e}")
             log_error("MT5 connection error", f"Unexpected error: {str(e)}")
+            self._connected = False
             return False
     
     def disconnect(self):
@@ -623,14 +451,10 @@ class DataManager:
             return
         
         try:
-            # Use connector if available
-            if self._use_connector and self._mt5_connector is not None:
+            # Always use connector for disconnect
+            if self._mt5_connector is not None:
                 self._mt5_connector.disconnect()
                 logger.info("Disconnected from MT5 (via connector)")
-                log_connection("Disconnected from MT5")
-            elif self.use_mt5 and MT5_AVAILABLE:
-                mt5.shutdown()
-                logger.info("Disconnected from MT5")
                 log_connection("Disconnected from MT5")
         except Exception as e:
             logger.warning(f"Error during disconnect: {e}")
@@ -638,8 +462,25 @@ class DataManager:
             self._connected = False
 
     def is_connected(self) -> bool:
-        """Check if connected to MT5"""
+        """Check if connected to MT5 (synchronized with connector)"""
+        # Always sync with connector state (source of truth)
+        if self._mt5_connector is not None:
+            self._connected = self._mt5_connector.is_connected()
         return self._connected
+    
+    def _validate_connection_state(self):
+        """Validate that internal state matches connector state"""
+        if self._mt5_connector is not None:
+            connector_connected = self._mt5_connector.is_connected()
+            if self._connected != connector_connected:
+                logger.warning(
+                    f"Connection state mismatch detected! "
+                    f"DataManager._connected={self._connected}, "
+                    f"MT5Connector.is_connected()={connector_connected}. "
+                    f"Syncing to connector state."
+                )
+                # Sync to connector state (source of truth)
+                self._connected = connector_connected
 
     def find_broker_symbol(self, standard_symbol: str) -> Optional[str]:
         """
@@ -938,6 +779,9 @@ class DataManager:
         """
         FIXED: Public method to fetch OHLCV for a single timeframe with enhanced fallback logic.
         """
+        # Validate connection state before fetching
+        self._validate_connection_state()
+        
         # FIXED: Ensure end_utc is timezone-aware
         if end_utc is None:
             end_utc = datetime.now(timezone.utc)
