@@ -427,7 +427,7 @@ class TradingGUI:
         
         ttk.Label(mt5_frame, text="MT5 Server:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=2)
         self.mt5_server_entry = ttk.Entry(mt5_frame, width=20)
-        self.mt5_server_entry.insert(0, "Pepperstone-Demo")
+        self.mt5_server_entry.insert(0, "ExnessKE-MT5Trial9")
         self.mt5_server_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=2)
         
         self.auto_connect_var = tk.BooleanVar(value=self.config.get("auto_connect_mt5", False))

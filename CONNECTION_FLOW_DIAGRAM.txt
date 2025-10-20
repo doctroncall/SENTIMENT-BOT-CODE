@@ -1,0 +1,231 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                  MT5 BOT CONNECTION FLOW - CURRENT STATE (BROKEN)              ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+                                    test_bot.py
+                                        │
+                                        ↓
+                            ┌───────────────────────┐
+                            │   DataManager()       │
+                            │   __init__()          │
+                            └───────────┬───────────┘
+                                        │
+                                        ↓
+                            ┌───────────────────────┐
+                            │   connect()           │
+                            └───────────┬───────────┘
+                                        │
+                    ┌───────────────────┴───────────────────┐
+                    │                                       │
+        ┌───────────▼────────────┐          ┌──────────────▼───────────┐
+        │  _use_connector=True   │          │  _use_connector=False    │
+        │  (New System)          │          │  (Legacy System)         │
+        └───────────┬────────────┘          └──────────────┬───────────┘
+                    │                                      │
+                    ↓                                      ↓
+    ┌──────────────────────────────┐      ┌─────────────────────────────┐
+    │ MT5Connector.get_instance()  │      │  mt5.initialize()           │
+    │ Creates SINGLETON            │      │  (Direct call)              │
+    └──────────────┬───────────────┘      └─────────────┬───────────────┘
+                   │                                    │
+                   ↓                                    ↓
+    ┌──────────────────────────────┐      ┌─────────────────────────────┐
+    │ connector.connect()          │      │  mt5.login()                │
+    │   ├─ mt5.initialize() ────┐  │      │  (Direct call)              │
+    │   └─ mt5.login()          │  │      └─────────────┬───────────────┘
+    └───────────┬───────────────┘  │                    │
+                │                  │                    │
+                │ ◄────────────────┘                    │
+                │  CONFLICT! Both try to                │
+                │  initialize MT5 terminal              │
+                │                                       │
+    ┌───────────▼────────────┐          ┌──────────────▼───────────┐
+    │ _state = CONNECTED     │          │ _connected = True        │
+    │ (MT5Connector)         │          │ (DataManager)            │
+    └────────────────────────┘          └──────────────────────────┘
+                │                                       │
+                │   INCONSISTENT STATE!                 │
+                │   Two different flags                 │
+                │   tracked independently               │
+                └───────────────┬───────────────────────┘
+                                │
+                                ↓
+                    ┌───────────────────────┐
+                    │  Later: verifier.py   │
+                    │  creates ANOTHER      │
+                    │  DataManager()        │
+                    └───────────┬───────────┘
+                                │
+                                ↓
+                    ┌───────────────────────────────┐
+                    │ Gets SAME MT5Connector        │
+                    │ singleton (with first         │
+                    │ config, ignores new config)   │
+                    └───────────┬───────────────────┘
+                                │
+                                ↓
+                            ❌ FAILURE
+                    Symbol fetch fails because
+                    config/state mismatch
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                  SYMBOL NORMALIZATION CONFLICT DIAGRAM                         ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+Input Symbol: "GBP/USD" or "GBP USD" or "GBPUSD"
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ↓                   ↓                   ↓
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│ mt5_connector │  │ data_manager  │  │  verifier.py  │
+│ normalize()   │  │ normalize()   │  │ _normalize()  │
+└───────┬───────┘  └───────┬───────┘  └───────┬───────┘
+        │                  │                  │
+        ↓                  ↓                  ↓
+  Remove: /,_,space   Calls MT5Connector  Calls MT5Connector
+        │             OR local version     OR local version
+        │                  │                  │
+        ↓                  ↓                  ↓
+    "GBPUSD"          "GBPUSD"            "GBP USD" ← BUG!
+        │                  │                  │      (No space removal
+        │                  │                  │       in local version)
+        │                  │                  │
+        └──────────────────┼──────────────────┘
+                           │
+                           ↓
+                SYMBOL CACHE MISMATCH!
+        Cache key "GBPUSD" ≠ "GBP USD"
+                           │
+                           ↓
+                 Symbol lookup FAILS
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    SINGLETON PATTERN CONFLICT DIAGRAM                          ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+Step 1: DataManager creates connector
+        │
+        ↓
+    ┌────────────────────────────────────┐
+    │ Config 1:                          │
+    │   login = 211744072                │
+    │   server = "ExnessKE-MT5Trial9"    │
+    │   password = "pass1"               │
+    └────────────┬───────────────────────┘
+                 │
+                 ↓
+    ┌────────────────────────────────────┐
+    │ MT5Connector.get_instance(config1) │
+    │ Creates NEW singleton              │
+    │ _instance = MT5Connector(config1)  │ ← Singleton created with config1
+    └────────────────────────────────────┘
+
+Step 2: Verifier creates connector (later)
+        │
+        ↓
+    ┌────────────────────────────────────┐
+    │ Config 2:                          │
+    │   login = 987654321  ← DIFFERENT!  │
+    │   server = "DifferentServer"       │
+    │   password = "pass2"               │
+    └────────────┬───────────────────────┘
+                 │
+                 ↓
+    ┌────────────────────────────────────┐
+    │ MT5Connector.get_instance(config2) │
+    │ Returns EXISTING singleton         │
+    │ (config2 is IGNORED!)              │ ← BUG! Uses config1, not config2
+    └────────────┬───────────────────────┘
+                 │
+                 ↓
+    ┌────────────────────────────────────┐
+    │ Verifier thinks it has its own     │
+    │ connection with config2, but       │
+    │ actually uses DataManager's        │
+    │ connection with config1!           │
+    └────────────┬───────────────────────┘
+                 │
+                 ↓
+              ❌ FAILURE
+         Wrong credentials used
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                      RECOMMENDED FIX - CLEAN FLOW                              ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+                                test_bot.py
+                                    │
+                                    ↓
+                        ┌───────────────────────┐
+                        │   DataManager()       │
+                        │   __init__()          │
+                        └───────────┬───────────┘
+                                    │
+                                    ↓
+                        ┌───────────────────────┐
+                        │   connect()           │
+                        │   (SINGLE METHOD)     │
+                        └───────────┬───────────┘
+                                    │
+                                    ↓
+                ┌──────────────────────────────────┐
+                │ Check if MT5Connector exists     │
+                │ and is connected                 │
+                └───────────┬──────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+                ↓                       ↓
+    ┌───────────────────┐   ┌───────────────────┐
+    │ Exists & Connected│   │ Not connected     │
+    └───────────┬───────┘   └───────────┬───────┘
+                │                       │
+                ↓                       ↓
+    ┌───────────────────┐   ┌───────────────────────────┐
+    │ REUSE connection  │   │ MT5Connector.get_instance()│
+    │ Sync state        │   │ connector.connect()        │
+    │ _connected = True │   │ SINGLE initialization      │
+    └───────────────────┘   └───────────┬───────────────┘
+                                        │
+                                        ↓
+                            ┌────────────────────────┐
+                            │ Sync states:           │
+                            │ _connected =           │
+                            │   connector.is_        │
+                            │   connected()          │
+                            └────────────────────────┘
+                                        │
+                                        ↓
+                            ┌────────────────────────┐
+                            │ ✅ SUCCESS             │
+                            │ Single connection      │
+                            │ Consistent state       │
+                            │ Reusable across all    │
+                            │ components             │
+                            └────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                           KEY TAKEAWAYS                                        ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+1. REMOVE all legacy mt5.initialize() and mt5.login() calls
+   → Use ONLY MT5Connector.get_instance().connect()
+
+2. SYNCHRONIZE connection state between DataManager and MT5Connector
+   → Always check connector.is_connected() as source of truth
+
+3. UNIFY symbol normalization
+   → Single function, imported by all modules
+
+4. FIX singleton config handling
+   → Warn or error when trying to create with different config
+
+5. REMOVE duplicate _initialized and _connected flags
+   → Track state in ONE place (MT5Connector)
+
+Result: Clean, reliable, maintainable MT5 bot
