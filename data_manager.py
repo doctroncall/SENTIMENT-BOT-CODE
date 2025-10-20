@@ -506,35 +506,33 @@ class DataManager:
             True if data is robust enough for analysis, False otherwise
         """
         if df.empty:
-            logger.error(f"❌ No data for {symbol} {timeframe}")
             return False
         
         # Check minimum data points
         min_bars = 30
         if len(df) < min_bars:
-            logger.error(f"❌ Insufficient data: {len(df)} bars (minimum {min_bars} required)")
+            logger.debug(f"Insufficient data: {len(df)} bars < {min_bars}")
             return False
         
         # Check for critical columns
         required_cols = ['open', 'high', 'low', 'close']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            logger.error(f"❌ Missing critical columns: {missing_cols}")
+            logger.debug(f"Missing columns: {missing_cols}")
             return False
         
         # Check for excessive NaN values
         for col in required_cols:
             nan_pct = (df[col].isna().sum() / len(df)) * 100
             if nan_pct > 10:  # More than 10% NaN is problematic
-                logger.error(f"❌ Too many NaN values in {col}: {nan_pct:.1f}%")
+                logger.debug(f"Too many NaN in {col}: {nan_pct:.1f}%")
                 return False
         
         # Check for data validity (prices should be positive)
         if (df[required_cols] <= 0).any().any():
-            logger.error(f"❌ Invalid prices detected (zero or negative values)")
+            logger.debug(f"Invalid prices detected")
             return False
         
-        logger.info(f"✅ Data robustness confirmed: {len(df)} valid bars for {symbol} {timeframe}")
         return True
 
     def fetch_ohlcv_for_timeframe(
@@ -546,13 +544,13 @@ class DataManager:
         use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
     ) -> pd.DataFrame:
         """
-        SIMPLIFIED: Fetch OHLCV for a single timeframe with simple retry logic.
+        PRODUCTION: Fetch OHLCV for a single timeframe with minimal logging.
         
         Flow:
-        1. Try MT5
-        2. If fails, retry ONCE
-        3. Notify outcome
-        4. No fallbacks by default (clean flow)
+        1. Try cache
+        2. Try MT5
+        3. Retry once if failed
+        4. Validate and return
         """
         # Ensure end_utc is timezone-aware
         if end_utc is None:
@@ -564,68 +562,50 @@ class DataManager:
         
         # Normalize symbol
         symbol = normalize_symbol(symbol)
-        
-        logger.info(f"📊 Fetching {symbol} {timeframe} for {lookback_days} days")
 
-        # Try cache first
+        # Try cache first (silent)
         cache_path = os.path.join(DATA_DIR, f"{symbol}_{timeframe}.csv")
         cached_df = self._load_from_cache(cache_path, start_utc, end_utc)
         if cached_df is not None and not cached_df.empty:
-            logger.info(f"✅ Using cached data ({len(cached_df)} bars)")
             return cached_df
 
-        # SIMPLIFIED FLOW: MT5 with simple retry
+        # Initialize empty DataFrame
         df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
         
         if not self.use_mt5:
-            logger.error(f"❌ MT5 disabled - cannot fetch data")
+            logger.error(f"MT5 disabled")
             return df
         
         # Ensure connection
         if not self._connected:
-            logger.info(f"🔌 MT5 not connected, connecting...")
             connected = self.connect()
             if not connected:
-                logger.error(f"❌ Failed to connect to MT5")
+                logger.error(f"MT5 connection failed")
                 return df
         
-        # ATTEMPT 1: Try to fetch data
-        logger.info(f"📡 Attempt 1: Fetching {symbol} {timeframe} from MT5...")
+        # ATTEMPT 1: Fetch from MT5
         try:
             df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-            if not df.empty:
-                logger.info(f"✅ Attempt 1 successful: {len(df)} bars fetched")
-            else:
-                logger.warning(f"⚠️ Attempt 1: No data returned")
         except Exception as e:
-            logger.warning(f"⚠️ Attempt 1 failed: {e}")
+            logger.debug(f"Fetch attempt 1 failed: {e}")
         
         # RETRY ONCE if first attempt failed
         if df.empty:
-            logger.info(f"🔄 Retrying once for {symbol} {timeframe}...")
-            time.sleep(2)  # Brief pause before retry
-            
+            time.sleep(1)  # Brief pause
             try:
                 df = self._fetch_mt5_ohlcv(symbol, timeframe, start_utc, end_utc)
-                if not df.empty:
-                    logger.info(f"✅ Retry successful: {len(df)} bars fetched")
-                else:
-                    logger.error(f"❌ Retry failed: No data returned after 2 attempts")
             except Exception as e:
-                logger.error(f"❌ Retry failed: {e}")
+                logger.debug(f"Fetch attempt 2 failed: {e}")
         
-        # VALIDATE DATA ROBUSTNESS
+        # VALIDATE & SAVE
         if not df.empty:
             df = self._clean_dataframe(df)
             
             if self._validate_data_robustness(df, symbol, timeframe):
                 self._save_to_cache(df, cache_path)
-                logger.info(f"✅ SUCCESS: {symbol} {timeframe} data ready for analysis")
             else:
-                logger.error(f"❌ FAILED: Data quality check failed for {symbol} {timeframe}")
+                logger.warning(f"Data quality check failed for {symbol} {timeframe}")
                 df = pd.DataFrame(columns=COLUMNS).set_index(pd.DatetimeIndex([], tz='UTC'))
-        else:
-            logger.error(f"❌ FAILED: Could not fetch {symbol} {timeframe} after 2 attempts")
 
         return df
 
@@ -717,7 +697,7 @@ class DataManager:
         use_yahoo_fallback: bool = False,  # SIMPLIFIED: Default to False
     ) -> Dict[str, pd.DataFrame]:
         """
-        SIMPLIFIED: Main convenience method - fetch data from MT5 only.
+        PRODUCTION: Main convenience method - fetch data from MT5 with console feedback.
         Returns a dict of DataFrames keyed by timeframe strings.
         
         Flow for each timeframe:
@@ -734,14 +714,8 @@ class DataManager:
         end_utc = datetime.now(timezone.utc)
         results = {}
         
-        logger.info(f"="*70)
-        logger.info(f"📊 Collecting data for {symbol} across {len(timeframes)} timeframes")
-        logger.info(f"="*70)
-        
+        # PRODUCTION: Minimal logging for clean console output
         for tf in timeframes:
-            logger.info(f"\n🔍 Timeframe: {symbol} {tf}")
-            logger.info(f"-"*70)
-            
             try:
                 df = self.fetch_ohlcv_for_timeframe(
                     symbol, tf, 
@@ -752,19 +726,9 @@ class DataManager:
                 
                 if not df.empty:
                     results[tf] = df
-                    logger.info(f"✅ SUCCESS: {symbol} {tf} - {len(df)} bars ready")
-                else:
-                    logger.error(f"❌ FAILED: {symbol} {tf} - No data available")
                     
             except Exception as e:
-                logger.error(f"❌ FAILED: {symbol} {tf} - Exception: {e}")
-
-        logger.info(f"\n{'='*70}")
-        if results:
-            logger.info(f"✅ DATA COLLECTION COMPLETE: {len(results)}/{len(timeframes)} timeframes successful")
-        else:
-            logger.error(f"❌ DATA COLLECTION FAILED: No data for any timeframe")
-        logger.info(f"{'='*70}\n")
+                logger.error(f"Error fetching {symbol} {tf}: {e}")
             
         return results
 
