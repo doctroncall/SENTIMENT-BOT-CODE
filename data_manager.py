@@ -15,10 +15,12 @@ Fixed Issues:
 """
 
 import os
+import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 import time
+import threading
 
 import pandas as pd
 import numpy as np
@@ -56,39 +58,88 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Logging
+# Root/basic logger configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataManager")
+logger.propagate = False
 
 # Connection-specific logging to file
 connection_logger = logging.getLogger("DataManager.Connection")
 connection_logger.setLevel(logging.DEBUG)
+# Prevent duplicate messages via root logger handlers
+connection_logger.propagate = False
+# Reset existing handlers to avoid duplicates on Streamlit reruns
+for _h in list(connection_logger.handlers):
+    try:
+        if hasattr(_h, "close"):
+            _h.close()
+    except Exception:
+        pass
+    connection_logger.removeHandler(_h)
 
 # Create logs directory if it doesn't exist
 LOGS_DIR = "logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# File handler for connection logs with UTF-8 encoding
+def _is_windows_ansi_console() -> bool:
+    """Detect Windows console likely using a non-UTF8 codepage (e.g., cp1252)."""
+    encoding = getattr(sys.stdout, "encoding", None) or ""
+    return os.name == "nt" and encoding.lower() not in ("utf-8", "utf8", "utf_8")
+
+
+class ConsoleSafeFormatter(logging.Formatter):
+    """Formatter that avoids UnicodeEncodeError on Windows ANSI consoles.
+
+    It preserves Unicode on UTF-8-capable terminals, and degrades gracefully
+    on ANSI codepages by replacing a few common symbols with ASCII fallbacks
+    and using a safe re-encode with replacement as a last resort.
+    """
+
+    _REPLACEMENTS = {
+        "✓": "OK",
+        "✅": "OK",
+        "❌": "X",
+        "⚠️": "WARN",
+        "⚠": "WARN",
+        "📊": "STATS",
+        "💡": "TIP",
+        "📋": "INFO",
+        "→": "->",
+        "—": "-",
+        "–": "-",
+        "…": "...",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        if not _is_windows_ansi_console():
+            return formatted
+
+        # Apply targeted replacements for known symbols first
+        for bad, good in self._REPLACEMENTS.items():
+            if bad in formatted:
+                formatted = formatted.replace(bad, good)
+
+        # Ensure string can be encoded by the active console
+        console_encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            formatted.encode(console_encoding)
+            return formatted
+        except Exception:
+            return formatted.encode(console_encoding, errors="replace").decode(console_encoding, errors="replace")
+
+
+# File handler for connection logs (force UTF-8 to support Unicode symbols)
 connection_log_file = os.path.join(LOGS_DIR, f"mt5_connection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-file_handler = logging.FileHandler(connection_log_file, encoding='utf-8')
+file_handler = logging.FileHandler(connection_log_file, encoding="utf-8")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
 connection_logger.addHandler(file_handler)
 
-# Also add console handler for connection logger with UTF-8 encoding
-import sys
-console_handler = logging.StreamHandler(sys.stdout)
+# Also add console handler for connection logger (ASCII-safe on Windows ANSI consoles)
+console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-# Force UTF-8 encoding to handle Unicode characters on Windows
-try:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8')
-    console_handler.stream.reconfigure(encoding='utf-8', errors='replace')
-except (AttributeError, Exception):
-    # Fallback: wrap the stream with UTF-8 encoding
-    import codecs
-    if not isinstance(console_handler.stream, codecs.StreamReaderWriter):
-        console_handler.stream = codecs.getwriter('utf-8')(console_handler.stream.buffer, errors='replace')
+console_handler.setFormatter(ConsoleSafeFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 connection_logger.addHandler(console_handler)
 
 logger.info(f"Connection logging enabled: {connection_log_file}")
@@ -163,6 +214,36 @@ EXTENDED_COLUMNS = ["real_volume", "spread"]
 
 # Whether to fetch extended data
 FETCH_EXTENDED_DATA = os.getenv("FETCH_EXTENDED_DATA", "1").strip() in ("1", "true", "yes", "on")
+
+# MT5 connection behavior (tunable via env)
+MT5_ATTACH_FIRST = os.getenv("MT5_ATTACH_FIRST", "1").strip().lower() in ("1", "true", "yes", "on")
+MT5_INIT_TIMEOUT_MS = int(os.getenv("MT5_INIT_TIMEOUT_MS", "12000"))
+MT5_LOGIN_TIMEOUT_MS = int(os.getenv("MT5_LOGIN_TIMEOUT_MS", "12000"))
+
+
+def _call_with_timeout(fn, *, timeout_seconds: float, args: Optional[tuple] = None, kwargs: Optional[dict] = None):
+    """Run a callable in a daemon thread, returning (completed, result, error).
+
+    This guards against 3rd-party calls that may hang (e.g., mt5.initialize/login).
+    """
+    args = args or ()
+    kwargs = kwargs or {}
+    container = {"done": False, "result": None, "error": None}
+
+    def runner():
+        try:
+            container["result"] = fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            container["error"] = exc
+        finally:
+            container["done"] = True
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if not container["done"]:
+        return False, None, TimeoutError(f"Call timed out after {timeout_seconds:.1f}s")
+    return True, container["result"], container["error"]
 
 
 # ----------------------------
@@ -286,56 +367,132 @@ class DataManager:
     def connect(self) -> bool:
         """
         Connect to MT5 with provided credentials.
-        Returns True if connected successfully, False otherwise.
+        Returns True if connected successfully.
         """
+        import time as time_module
+        start_time = time_module.time()
+
         # Validate prerequisites
         if not self.use_mt5:
-            logger.warning("MT5 usage disabled or MetaTrader5 module missing")
-            log_warning("MT5 usage disabled or module missing")
+            logger.info("MT5 usage disabled or MetaTrader5 module missing.")
             return False
-            
-        if not MT5_AVAILABLE or mt5 is None:
-            logger.error("MT5 module not available - cannot connect")
-            log_error("MT5 not available", "Install with: pip install MetaTrader5")
-            return False
-        
-        # Already connected?
+
         if self._connected:
-            logger.info("Already connected to MT5")
+            connection_logger.info("[STEP 3] Already connected to MT5")
+            log_connection("Already connected to MT5")
             return True
-        
-        # Start connection attempt
+
+        if not MT5_AVAILABLE or mt5 is None:
+            connection_logger.error("[STEP 2] MT5 module not available - cannot connect")
+            logger.error("MT5 module not available - cannot connect")
+            log_error("MT5 not available", "MetaTrader5 module not installed. Run: pip install MetaTrader5")
+            return False
+
         connection_logger.info("="*80)
-        connection_logger.info(f"Connecting to MT5 | Server: {self.mt5_server} | Account: {self.mt5_login}")
+        connection_logger.info("CONNECTION ATTEMPT STARTED")
         connection_logger.info("="*80)
+        connection_logger.debug(f"[STEP 1] Checking if MT5 usage is enabled: use_mt5={self.use_mt5}")
+        connection_logger.debug(f"[STEP 1] ✓ MT5 usage is enabled (elapsed: {time_module.time()-start_time:.3f}s)")
+        log_connection("Attempting to connect to MT5...", f"Server: {self.mt5_server}")
+
+        # Step 4: Initialize MT5 with timeout and attach-first behavior
+        connection_logger.info(f"[STEP 4] Starting MT5 initialization...")
+        connection_logger.debug(f"[STEP 4] MT5 path: {self.mt5_path}")
+        connection_logger.debug(f"[STEP 4] Path exists: {os.path.exists(self.mt5_path) if self.mt5_path else 'N/A'}")
+
+        try:
+            init_start = time_module.time()
+
+            def _init_auto():
+                return mt5.initialize()
+
+            def _init_with_path():
+                return mt5.initialize(self.mt5_path)
+
+            initialized = False
+            tried_methods = []
+
+            def _try_init(callable_fn, label: str) -> bool:
+                nonlocal tried_methods
+                tried_methods.append(label)
+                connection_logger.debug(f"[STEP 4] >>> Attempt: {label} (timeout {MT5_INIT_TIMEOUT_MS}ms) <<<")
+                completed, result, err = _call_with_timeout(
+                    callable_fn,
+                    timeout_seconds=max(1, MT5_INIT_TIMEOUT_MS / 1000.0),
+                )
+                if not completed:
+                    connection_logger.error(f"[STEP 4] {label} timed out after {MT5_INIT_TIMEOUT_MS}ms")
+                    return False
+                if err:
+                    connection_logger.error(f"[STEP 4] {label} raised: {err}")
+                    return False
+                connection_logger.debug(f"[STEP 4] <<< {label} returned: {result} (took {time_module.time()-init_start:.3f}s) >>>")
+                return bool(result)
+
+            # Prefer attach-first (auto) to avoid launching terminal if already running
+            if MT5_ATTACH_FIRST:
+                initialized = _try_init(_init_auto, "mt5.initialize() attach-first")
+                if not initialized and self.mt5_path and os.path.exists(self.mt5_path):
+                    initialized = _try_init(_init_with_path, "mt5.initialize(path)")
+            else:
+                if self.mt5_path and os.path.exists(self.mt5_path):
+                    initialized = _try_init(_init_with_path, "mt5.initialize(path)")
+                if not initialized:
+                    initialized = _try_init(_init_auto, "mt5.initialize() attach-first")
+
+            connection_logger.info(f"[STEP 4] MT5 initialization result: {initialized} (attempts: {', '.join(tried_methods)})")
+
+            if not initialized:
+                error_info = mt5.last_error() if hasattr(mt5, 'last_error') else None
+                connection_logger.error(f"[STEP 4] MT5 initialization failed. last_error={error_info}")
+                error_msg = f"{error_info}" if error_info else "Unknown error"
+                logger.error(f"MT5 initialize failed: {error_msg}")
+                log_error(
+                    "MT5 initialization failed",
+                    f"{error_msg}\n\nTroubleshooting:\n1. Ensure MT5 is running and logged in\n2. Verify MT5_PATH if provided\n3. Close any modal dialogs in MT5 (e.g., update prompts)\n4. Try setting MT5_ATTACH_FIRST=0 to force path init",
+                )
+                self._connected = False
+                return False
+
+            connection_logger.info(f"[STEP 4] ✓ MT5 initialized successfully (elapsed: {time_module.time()-start_time:.3f}s)")
+
+        except Exception as e:
+            connection_logger.exception(f"[STEP 4] EXCEPTION during MT5 initialization: {e}")
+            logger.exception(f"Failed to initialize MT5 terminal: {e}")
+            log_error(
+                "MT5 terminal initialization exception",
+                f"{str(e)}\n\nThis usually means:\n1. MT5 terminal is not running\n2. MT5 path is incorrect\n3. MT5 needs to be restarted",
+            )
+            self._connected = False
+            return False
+
+        # Step 5: Login to MT5
+        connection_logger.info(f"[STEP 5] Starting MT5 login...")
+        connection_logger.debug(f"[STEP 5] Server: {self.mt5_server}")
+        connection_logger.debug(f"[STEP 5] Login: {self.mt5_login}")
+        connection_logger.debug(f"[STEP 5] Password: {'*' * len(self.mt5_password) if self.mt5_password else 'None'}")
         
         try:
-            # Initialize MT5 terminal
-            if self.mt5_path and os.path.exists(self.mt5_path):
-                initialized = mt5.initialize(self.mt5_path)
-            else:
-                initialized = mt5.initialize()
-            
-            if not initialized:
-                error = mt5.last_error()
-                connection_logger.error(f"Initialization failed: {error}")
-                logger.error(f"MT5 initialization failed: {error}")
-                log_error("MT5 initialization failed", 
-                         f"Error: {error}\n\nSteps to fix:\n"
-                         "1. Ensure MT5 terminal is installed and running\n"
-                         "2. Enable 'Algo Trading' in MT5 (Tools > Options > Expert Advisors)\n"
-                         "3. Verify terminal path is correct\n"
-                         "4. Try restarting MT5 terminal")
-                return False
-            
-            connection_logger.info("MT5 terminal initialized successfully")
-            
-            # Login to account
-            authorized = mt5.login(
-                login=self.mt5_login,
-                password=self.mt5_password,
-                server=self.mt5_server
+            login_start = time_module.time()
+            logger.info(f"Attempting login to {self.mt5_server} with account {self.mt5_login}")
+            connection_logger.debug(f"[STEP 5] >>> About to call mt5.login() with timeout {MT5_LOGIN_TIMEOUT_MS}ms <<<")
+
+            def _login_call():
+                return mt5.login(login=self.mt5_login, password=self.mt5_password, server=self.mt5_server)
+
+            completed, authorized, err = _call_with_timeout(
+                _login_call,
+                timeout_seconds=max(1, MT5_LOGIN_TIMEOUT_MS / 1000.0),
             )
+            if not completed:
+                connection_logger.error(f"[STEP 5] mt5.login() timed out after {MT5_LOGIN_TIMEOUT_MS}ms")
+                authorized = False
+            if err:
+                connection_logger.error(f"[STEP 5] mt5.login() raised: {err}")
+                authorized = False
+
+            connection_logger.debug(f"[STEP 5] <<< mt5.login() returned: {authorized} (took {time_module.time()-login_start:.3f}s) >>>")
+            connection_logger.info(f"[STEP 5] MT5 login result: {authorized} (elapsed: {time_module.time()-start_time:.3f}s)")
             
             if not authorized:
                 error = mt5.last_error()
